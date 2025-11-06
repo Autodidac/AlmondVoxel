@@ -18,7 +18,7 @@
     <Text Include="CMakeLists.txt" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="src\Application1.cpp">
+    <ClCompile Include="..\examples\terrain_demo.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
