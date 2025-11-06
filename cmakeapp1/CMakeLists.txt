@@ -39,7 +39,7 @@ target_compile_options(${PROJECT_NAME}
 # Find and link dependencies
 find_package(Threads QUIET)
 
-target_link_libraries(${PROJECT_NAME} PRIVATE safe_io)
+target_link_libraries(${PROJECT_NAME} PRIVATE almond_voxel)
 
 if(Threads_FOUND)
     target_link_libraries(${PROJECT_NAME} PRIVATE Threads::Threads)
