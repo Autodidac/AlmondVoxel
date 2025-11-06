@@ -4,9 +4,9 @@
     {
       "type": "cmake",
       "request": "launch",
-      "name": "CMake: Script debugging - linux",
-      "cmakeDebugType": "script",
-      "scriptPath": "${workspaceFolder}/bin/Ninja-Debug/cmakeapp1/cmake_install.cmake"
+      "name": "CMake: Launch terrain_demo",
+      "cmakeTarget": "terrain_demo",
+      "description": "Launch the terrain_demo example when ALMOND_VOXEL_BUILD_EXAMPLES is enabled."
     }
   ]
 }
