@@ -4,8 +4,8 @@
 cmake_minimum_required (VERSION 3.8)
 #cmake_minimum_required(VERSION 3.3[...<3.8>] [FATAL_ERROR])
 
-project(MyCrossPlatformProject VERSION 1.0
-                  DESCRIPTION "My Cross Platform Project Description"
+project(AlmondVoxel VERSION 0.1.0
+                  DESCRIPTION "Almond Voxel interface library"
                   LANGUAGES CXX)
 
 # Set C++ standard
@@ -43,13 +43,29 @@ else()
     set(VCPKG_INSTALLATION_ROOT "${CMAKE_SOURCE_DIR}/vcpkg_installed")
 endif()
 
-# Include sub-projects
-add_subdirectory("shared/safe_io")
-add_subdirectory("cmakeapp1")
-add_subdirectory("app1")
+add_library(almond_voxel INTERFACE)
+target_compile_features(almond_voxel INTERFACE cxx_std_20)
+target_include_directories(almond_voxel
+    INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/almond_voxel>
+        $<INSTALL_INTERFACE:include>
+        $<INSTALL_INTERFACE:include/almond_voxel>
+)
 
-add_subdirectory ("Application1")
-add_subdirectory ("StaticLib1")
+option(ALMOND_VOXEL_BUILD_EXAMPLES "Build Almond Voxel example targets" OFF)
+option(ALMOND_VOXEL_BUILD_BENCHMARKS "Build Almond Voxel benchmark targets" OFF)
+
+if(ALMOND_VOXEL_BUILD_EXAMPLES)
+    message(STATUS "Example targets are currently placeholder entries.")
+endif()
+
+if(ALMOND_VOXEL_BUILD_BENCHMARKS)
+    message(STATUS "Benchmark targets are currently placeholder entries.")
+endif()
+
+install(TARGETS almond_voxel EXPORT almond_voxelTargets)
+install(DIRECTORY include/ DESTINATION include)
 
 
 

@@ -5,134 +5,75 @@
       "name": "vcpkg",
       "hidden": true,
       "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "installDir": "${sourceDir}/out/install/${presetName}",
       "cacheVariables": {
-        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
-      }
-    },
-    {
-      "name": "Ninja-Debug",
-      "displayName": "Linux Debug (vcpkg)",
-      "inherits": [ "vcpkg" ],
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/bin/${presetName}",
-      "installDir": "${sourceDir}/bin/install/${presetName}",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       },
       "environment": {
-        "VCPKG_ROOT": "/home/dude/Documents/repos/vcpkg"
-      },
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Linux"
-      },
-      "vendor": {
-        "microsoft.com/VisualStudioRemoteSettings/CMake/1.0": {
-          "sourceDir": "$env{HOME}/.vs/$ms{projectDirName}"
-        }
+        "VCPKG_FEATURE_FLAGS": "manifests"
       }
     },
     {
-      "name": "Ninja-Release",
-      "displayName": "Linux Release (vcpkg)",
-      "inherits": [ "Ninja-Debug" ],
+      "name": "debug",
+      "displayName": "Debug",
+      "description": "Configure Almond Voxel interface library (Debug)",
+      "inherits": ["vcpkg"],
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ALMOND_VOXEL_BUILD_EXAMPLES": "OFF",
+        "ALMOND_VOXEL_BUILD_BENCHMARKS": "OFF"
       }
     },
     {
-      "name": "macos-debug",
-      "displayName": "macOS Debug (vcpkg)",
-      "inherits": [ "vcpkg" ],
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/bin/${presetName}",
-      "installDir": "${sourceDir}/bin/install/${presetName}",
+      "name": "release",
+      "displayName": "Release",
+      "description": "Configure Almond Voxel interface library (Release)",
+      "inherits": ["vcpkg"],
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
-      },
-      "environment": {
-        "VCPKG_ROOT": "/home/dude/Documents/repos/vcpkg"
-      },
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Darwin"
-      },
-      "vendor": {
-        "microsoft.com/VisualStudioRemoteSettings/CMake/1.0": {
-          "sourceDir": "$env{HOME}/.vs/$ms{projectDirName}"
-        }
+        "CMAKE_BUILD_TYPE": "Release",
+        "ALMOND_VOXEL_BUILD_EXAMPLES": "OFF",
+        "ALMOND_VOXEL_BUILD_BENCHMARKS": "OFF"
       }
     },
     {
-      "name": "macos-release",
-      "displayName": "macOS Release (vcpkg)",
-      "inherits": [ "macos-debug" ],
+      "name": "debug-examples",
+      "displayName": "Debug + Examples",
+      "description": "Configure Almond Voxel with example and benchmark targets enabled (Debug)",
+      "inherits": ["debug"],
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
+        "ALMOND_VOXEL_BUILD_EXAMPLES": "ON",
+        "ALMOND_VOXEL_BUILD_BENCHMARKS": "ON"
       }
     },
     {
-      "name": "windows-base",
-      "hidden": true,
-      "inherits": [ "vcpkg" ],
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/bin/${presetName}",
-      "installDir": "${sourceDir}/bin/install/${presetName}",
+      "name": "release-examples",
+      "displayName": "Release + Examples",
+      "description": "Configure Almond Voxel with example and benchmark targets enabled (Release)",
+      "inherits": ["release"],
       "cacheVariables": {
-        "CMAKE_C_COMPILER": "cl.exe",
-        "CMAKE_CXX_COMPILER": "cl.exe"
-      },
-      "environment": {
-        "VCPKG_ROOT": "C:/Users/me/source/repos/vcpkg",
-        "VCPKG_ROOT": "C:/Users/me/source/repos/Cpp20_Ultimate_Repo_Template_2025/bin/x64-release/vcpkg_installed"
-      },
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Windows"
+        "ALMOND_VOXEL_BUILD_EXAMPLES": "ON",
+        "ALMOND_VOXEL_BUILD_BENCHMARKS": "ON"
       }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug"
     },
     {
-      "name": "x64-debug",
-      "displayName": "x64 Debug (Windows)",
-      "inherits": [ "windows-base" ],
-      "architecture": {
-        "value": "x64",
-        "strategy": "external"
-      },
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
-      }
+      "name": "release",
+      "configurePreset": "release"
     },
     {
-      "name": "x64-release",
-      "displayName": "x64 Release (Windows)",
-      "inherits": [ "x64-debug" ],
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
-      }
+      "name": "debug-examples",
+      "configurePreset": "debug-examples"
     },
     {
-      "name": "x86-debug",
-      "displayName": "x86 Debug (Windows)",
-      "inherits": [ "windows-base" ],
-      "architecture": {
-        "value": "x86",
-        "strategy": "external"
-      },
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
-      }
-    },
-    {
-      "name": "x86-release",
-      "displayName": "x86 Release (Windows)",
-      "inherits": [ "x86-debug" ],
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
-      }
+      "name": "release-examples",
+      "configurePreset": "release-examples"
     }
   ]
 }

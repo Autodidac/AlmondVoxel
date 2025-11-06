@@ -52,7 +52,7 @@
   ],
 
 
-  "cmake.toolchain": "../${workspaceFolder}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+  "cmake.toolchain": "${env:VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
 
   "C_Cpp_Runner.useAddressSanitizer": false,
   "C_Cpp_Runner.useUndefinedSanitizer": false,
