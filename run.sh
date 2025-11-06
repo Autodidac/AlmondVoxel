@@ -1,47 +1,30 @@
  
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -euo pipefail
 
-if [[ $# -gt 2 ]]; then
-  echo "Usage: $0 [gcc|clang|msvc] [Debug|Release]" >&2
-  exit 1
-fi
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-COMPILER="${1:-gcc}"
-BUILD_TYPE="${2:-Debug}"
+TARGET_NAME="${1:-terrain_demo}"
 
-case "$COMPILER" in
-  gcc)
-    COMPILER_NAME="GCC"
-    ;;
-  clang)
-    COMPILER_NAME="Clang"
-    ;;
-  msvc)
-    COMPILER_NAME="MSVC"
-    ;;
-  *)
-    echo "Usage: $0 [gcc|clang|msvc] [Debug|Release]" >&2
-    exit 1
-    ;;
-esac
-
-BUILD_DIR="$SCRIPT_DIR/Bin/${COMPILER_NAME}-${BUILD_TYPE}/cmakeapp1"
-BINARY_CANDIDATES=(
-  "$BUILD_DIR/cmakeapp1"
-  "$BUILD_DIR/${BUILD_TYPE}/cmakeapp1"
-  "$BUILD_DIR/cmakeapp1.exe"
-  "$BUILD_DIR/${BUILD_TYPE}/cmakeapp1.exe"
+declare -a SEARCH_ROOTS=(
+  "${SCRIPT_DIR}/out/build"
+  "${SCRIPT_DIR}/build"
+  "${SCRIPT_DIR}/bin"
+  "${SCRIPT_DIR}/Bin"
 )
 
-for binary in "${BINARY_CANDIDATES[@]}"; do
-  if [[ -x "$binary" ]]; then
-    exec "$binary"
-  fi
+for root in "${SEARCH_ROOTS[@]}"; do
+  [[ -d "${root}" ]] || continue
+  while IFS= read -r -d '' candidate; do
+    echo "Launching ${candidate}" >&2
+    exec "${candidate}"
+  done < <(find "${root}" -type f \( -name "${TARGET_NAME}" -o -name "${TARGET_NAME}.exe" \) -perm -u+x -print0)
 done
 
-echo "Unable to locate built executable for ${COMPILER_NAME}-${BUILD_TYPE}." >&2
-echo "Ensure the project is configured and built before running." >&2
+cat <<'MSG' >&2
+No runnable example was found.
+Build an example (e.g., cmake --build --preset debug-examples) and rerun this script,
+or specify a different target name as the first argument.
+MSG
+
 exit 1
