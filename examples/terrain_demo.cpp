@@ -1,7 +1,12 @@
 #include "almond_voxel/world.hpp"
 #include "almond_voxel/meshing/greedy_mesher.hpp"
 
+#define SDL_MAIN_HANDLED
+
 #include <SDL3/SDL.h>
+//#include <SDL3/SDL_main.h>
+//#include <SDL3/SDL_opengl.h>
+//#include <GL/glu.h>
 
 #include <algorithm>
 #include <array>
@@ -50,16 +55,16 @@ float dot(float3 a, float3 b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
-SDL_Color shade_color(voxel_id id, const std::array<float, 3>& normal_values) {
+SDL_FColor shade_color(voxel_id id, const std::array<float, 3>& normal_values) {
     const float3 normal = normalize(to_float3(normal_values));
     const float3 light = normalize(float3{0.6f, 0.9f, 0.5f});
     const float intensity = std::clamp(dot(normal, light) * 0.5f + 0.5f, 0.2f, 1.0f);
 
-    SDL_Color base{};
+    SDL_FColor base{};
     if (id == voxel_id{}) {
-        base = SDL_Color{200, 200, 200, 255};
+        base = SDL_FColor{200, 200, 200, 255};
     } else {
-        base = SDL_Color{90, 170, 90, 255};
+        base = SDL_FColor{90, 170, 90, 255};
     }
 
     const auto scale_component = [intensity](std::uint8_t component) {
@@ -140,7 +145,7 @@ int main() {
     const auto mesh = meshing::greedy_mesh(chunk);
     print_statistics(mesh);
 
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << "Failed to initialise SDL: " << SDL_GetError() << "\n";
         return 1;
     }
@@ -152,7 +157,7 @@ int main() {
         return 1;
     }
 
-    SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
     if (renderer == nullptr) {
         std::cerr << "Failed to create SDL renderer: " << SDL_GetError() << "\n";
         SDL_DestroyWindow(window);
@@ -175,7 +180,7 @@ int main() {
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) {
                 running = false;
-            } else if (event.type == SDL_EVENT_KEY_DOWN && event.key.keysym.sym == SDLK_ESCAPE) {
+            } else if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
                 running = false;
             }
         }
