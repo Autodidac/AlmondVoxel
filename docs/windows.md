@@ -1,45 +1,56 @@
 # Windows guide
 
-This document captures the recommended tooling and workflows for building the template on Windows hosts.
+Use this guide to configure AlmondVoxel on Windows 10/11 for Visual Studio, VS Code, or command-line workflows.
 
 ## Prerequisites
-- **Visual Studio 2022** (or Build Tools) with the *Desktop development with C++* workload.
-- **Ninja** (recommended): install via [Chocolatey](https://chocolatey.org/) or scoop.
-- **Git for Windows**: provides Git Bash for running the repository scripts.
-- **vcpkg**: clone `https://github.com/microsoft/vcpkg` and run `bootstrap-vcpkg.bat`.
-- **Vulkan SDK** (optional but recommended): install from [LunarG](https://vulkan.lunarg.com/sdk/home#windows).
+- **Visual Studio 2022** (Desktop development with C++) or the **MSVC Build Tools**.
+- **CMake 3.23+** installed via the Visual Studio installer or the official binaries.
+- **Ninja** (optional) from [Chocolatey](https://community.chocolatey.org/packages/ninja) or [Scoop](https://scoop.sh/).
+- **Git for Windows** to provide Git Bash and Unix-compatible shells.
 
-Configure your environment variables:
+Optional components:
+- **Windows SDK graphics tools** if you plan to run the ImGui sandbox with GPU capture.
+- **vcpkg** only when experimenting with custom dependencies inside the examples—AlmondVoxel itself has none.
+
+## Environment setup
+Open *Developer PowerShell for VS* or *x64 Native Tools Command Prompt* and ensure the tools are accessible:
 ```powershell
-$env:VCPKG_ROOT = "C:\path\to\vcpkg"
-$env:PATH = "$env:VCPKG_ROOT;$env:PATH"
-$env:VULKAN_SDK = "C:\VulkanSDK\<version>"
-```
-If you installed the SDK system-wide, add `%VULKAN_SDK%\Bin` to `PATH`.
-
-## Configure, build, install, run
-Run the scripts from **x64 Native Tools Command Prompt for VS** or **Developer PowerShell** so that `cl.exe` and Ninja are available.
-
-```powershell
-bash ./cmake/configure.sh msvc Debug
-bash ./build.sh msvc Debug
-bash ./install.sh msvc Debug
-bash ./run.sh msvc Debug
+where cmake
+where ninja
 ```
 
-> Tip: `bash` comes with Git for Windows. The scripts are also compatible with WSL.
+If using Git Bash, forward the MSVC toolchain environment:
+```bash
+"/c/Program Files/Microsoft Visual Studio/2022/Community/Common7/Tools/VsDevCmd.bat" -arch=x64
+```
 
-## Visual Studio workflows
-- Open `app1.sln` if you prefer managing the project through a classic solution.
-- Alternatively, use **File → Open → CMake...** and select `CMakeLists.txt`. Visual Studio consumes `CMakePresets.json` to mirror the scripted configurations.
+## Configure and build
+```powershell
+bash ./cmake/configure.sh msvc Debug -DALMOND_VOXEL_ENABLE_IMGUI=ON
+bash ./build.sh msvc Debug example_sandbox
+bash ./run.sh msvc Debug example_sandbox
+```
 
-## VS Code workflows
-1. Install the *C/C++*, *CMake Tools*, and *CMake* extensions.
-2. Open the repository folder and select the appropriate kit (MSVC, GCC, or Clang).
-3. Use the *CMake: Configure* and *CMake: Build* commands, or call the scripts from the integrated terminal.
+To install headers and binaries for redistribution:
+```powershell
+bash ./install.sh msvc Release
+```
+
+## Configuration flags
+The same CMake flags as Linux apply. To pass multiple flags from PowerShell:
+```powershell
+bash ./cmake/configure.sh msvc Release `
+    -DALMOND_VOXEL_COMPRESSION=LZ4 `
+    -DALMOND_VOXEL_ENABLE_PROFILING=ON
+```
+
+## Performance notes
+- Enable `/arch:AVX2` by setting `CXXFLAGS` before running `configure.sh` for chunk-heavy workloads.
+- When profiling on laptops, disable ImGui (`-DALMOND_VOXEL_ENABLE_IMGUI=OFF`) to keep GPU usage low.
+- Use the Visual Studio *Graphics Analyzer* to inspect the sandbox renderer after launching via `run.sh`.
 
 ## Troubleshooting
-- **vcpkg toolchain not detected**: Confirm `VCPKG_ROOT` or `VCPKG_INSTALLATION_ROOT` points to the vcpkg directory before running the configure script.
-- **Ninja not found**: Install with `choco install ninja` or remove `ninja.exe` from `PATH` to fallback to `Visual Studio 17 2022` generators.
-- **MSVC link errors**: Ensure you are in the correct architecture prompt (`x64 Native Tools`).
-- **Vulkan loader errors**: Verify `%VULKAN_SDK%\Bin` and `%VULKAN_SDK%\Lib` are on `PATH` and `%VK_LAYER_PATH%` points at the SDK `Bin` directory.
+- **CMake cannot find the compiler**: ensure the prompt is initialised with `VsDevCmd.bat` before calling the scripts.
+- **Ninja build files missing**: install Ninja or allow the scripts to fall back to the Visual Studio generator by removing `ninja.exe` from `PATH`.
+- **Sandbox window fails to create**: update your GPU drivers and verify that the Windows SDK graphics tools are installed.
+- **Doctest runner has no output**: use `./run.sh ... voxel_tests -- --reporters=console` to force console output.
