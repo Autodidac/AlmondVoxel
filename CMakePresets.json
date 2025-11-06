@@ -18,42 +18,24 @@
     {
       "name": "debug",
       "displayName": "Debug",
-      "description": "Configure Almond Voxel interface library (Debug)",
+      "description": "Configure Almond Voxel interface library with examples, tests, and benchmarks (Debug)",
       "inherits": ["vcpkg"],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "ALMOND_VOXEL_BUILD_EXAMPLES": "OFF",
-        "ALMOND_VOXEL_BUILD_BENCHMARKS": "OFF"
+        "ALMOND_VOXEL_BUILD_EXAMPLES": "ON",
+        "ALMOND_VOXEL_BUILD_TESTS": "ON",
+        "ALMOND_VOXEL_BUILD_BENCHMARKS": "ON"
       }
     },
     {
       "name": "release",
       "displayName": "Release",
-      "description": "Configure Almond Voxel interface library (Release)",
+      "description": "Configure Almond Voxel interface library with examples, tests, and benchmarks (Release)",
       "inherits": ["vcpkg"],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "ALMOND_VOXEL_BUILD_EXAMPLES": "OFF",
-        "ALMOND_VOXEL_BUILD_BENCHMARKS": "OFF"
-      }
-    },
-    {
-      "name": "debug-examples",
-      "displayName": "Debug + Examples",
-      "description": "Configure Almond Voxel with example and benchmark targets enabled (Debug)",
-      "inherits": ["debug"],
-      "cacheVariables": {
         "ALMOND_VOXEL_BUILD_EXAMPLES": "ON",
-        "ALMOND_VOXEL_BUILD_BENCHMARKS": "ON"
-      }
-    },
-    {
-      "name": "release-examples",
-      "displayName": "Release + Examples",
-      "description": "Configure Almond Voxel with example and benchmark targets enabled (Release)",
-      "inherits": ["release"],
-      "cacheVariables": {
-        "ALMOND_VOXEL_BUILD_EXAMPLES": "ON",
+        "ALMOND_VOXEL_BUILD_TESTS": "ON",
         "ALMOND_VOXEL_BUILD_BENCHMARKS": "ON"
       }
     }
@@ -66,14 +48,6 @@
     {
       "name": "release",
       "configurePreset": "release"
-    },
-    {
-      "name": "debug-examples",
-      "configurePreset": "debug-examples"
-    },
-    {
-      "name": "release-examples",
-      "configurePreset": "release-examples"
     }
   ]
 }
