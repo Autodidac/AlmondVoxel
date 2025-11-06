@@ -1,16 +1,38 @@
-// main.cpp
-#include <safe_io/utils.hpp>
+#include "almond_voxel/almond_voxel.hpp"
 
-int main()
-{
-    // Print messages using {fmt} formatting.
-    safe_io::print("Production code: {}", "Hello, world!");
-    safe_io::print("This output is buffered for {}.", "efficiency");
+#include <cstdint>
+#include <iostream>
+#include <vector>
 
-    // Explicit flushing can be done if required.
-    // safe_io::out().flush();
+using namespace almond::voxel;
 
-#ifndef _WIN32
-    return 0; // Explicit return for non-Windows platforms.
-#endif
+int main() {
+    chunk_storage chunk{cubic_extent(8)};
+    auto voxels = chunk.voxels();
+    const auto dims = chunk.extent().to_array();
+
+    for (std::uint32_t z = 0; z < dims[2]; ++z) {
+        for (std::uint32_t y = 0; y < dims[1]; ++y) {
+            for (std::uint32_t x = 0; x < dims[0]; ++x) {
+                voxels(x, y, z) = (x + y + z) % 3 == 0 ? static_cast<voxel_id>(2) : voxel_id{};
+            }
+        }
+    }
+
+    region_manager manager{chunk.extent()};
+    region_key key{1, 0, 0};
+    manager.assure(key).assign_voxels(chunk.voxels().linear());
+
+    auto mesh = meshing::greedy_mesh(manager.assure(key));
+    std::cout << "Generated mesh with " << mesh.vertices.size() << " vertices from "
+              << chunk.volume() << " voxels\n";
+
+    auto snapshots = manager.snapshot_loaded();
+    std::vector<serialization::region_blob> blobs;
+    for (const auto& snapshot : snapshots) {
+        blobs.push_back(serialization::serialize_snapshot(snapshot));
+    }
+
+    std::cout << "Serialized " << blobs.size() << " region(s)\n";
+    return 0;
 }

@@ -43,13 +43,16 @@ else()
     set(VCPKG_INSTALLATION_ROOT "${CMAKE_SOURCE_DIR}/vcpkg_installed")
 endif()
 
+# Header-only voxel library
+add_library(almond_voxel INTERFACE)
+target_include_directories(almond_voxel INTERFACE "${CMAKE_SOURCE_DIR}/include")
+target_compile_features(almond_voxel INTERFACE cxx_std_20)
+
 # Include sub-projects
-add_subdirectory("shared/safe_io")
 add_subdirectory("cmakeapp1")
 add_subdirectory("app1")
 
 add_subdirectory ("Application1")
-add_subdirectory ("StaticLib1")
 
 
 

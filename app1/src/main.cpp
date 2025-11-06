@@ -1,24 +1,25 @@
 // main.cpp
-#include <safe_io/utils.hpp>
+#include "almond_voxel/almond_voxel.hpp"
+
+#include <cstdint>
 #include <iostream>
-#include <limits>
-#include <string>
 
-int main()
-{
-    // Print messages using {fmt} formatting.
-    safe_io::print("Production code: {}", "Hello, world!");
-    safe_io::print("This output is buffered for {}.", "efficiency");
+using namespace almond::voxel;
 
-    // Explicit flushing can be done if required.
-    // safe_io::out().flush();
+int main() {
+    chunk_storage chunk{cubic_extent(4)};
+    auto voxels = chunk.voxels();
+    const auto dims = chunk.extent().to_array();
 
-#ifdef _WIN32
-    // Wait for console input to keep the window open on Windows.
-    safe_io::print("Press Enter to exit...");
-    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-    std::cin.get();
-#else
-    return 0; // Explicit return for non-Windows platforms.
-#endif
+    for (std::uint32_t z = 0; z < dims[2]; ++z) {
+        for (std::uint32_t y = 0; y < dims[1]; ++y) {
+            for (std::uint32_t x = 0; x < dims[0]; ++x) {
+                voxels(x, y, z) = (x == 0 || y == 0 || z == 0) ? static_cast<voxel_id>(1) : voxel_id{};
+            }
+        }
+    }
+
+    auto mesh = meshing::greedy_mesh(chunk);
+    std::cout << "Voxel boundary produced " << mesh.vertices.size() << " vertices\n";
+    return 0;
 }

@@ -11,7 +11,7 @@ add_executable(app1
 )
 
 target_link_libraries(app1 PRIVATE
-    safe_io
+    almond_voxel
 )
 
 # Installation rule
