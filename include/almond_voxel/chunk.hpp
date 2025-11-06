@@ -21,6 +21,10 @@ public:
     using decompress_callback = std::function<void(voxel_span<voxel_id>, std::span<const std::byte>)>;
 
     explicit chunk_storage(chunk_extent extent = cubic_extent(32));
+    chunk_storage(const chunk_storage&) = delete;
+    chunk_storage& operator=(const chunk_storage&) = delete;
+    chunk_storage(chunk_storage&& other) noexcept;
+    chunk_storage& operator=(chunk_storage&& other) noexcept;
 
     [[nodiscard]] chunk_extent extent() const noexcept { return extent_; }
     [[nodiscard]] std::size_t volume() const noexcept { return extent_.volume(); }
@@ -81,6 +85,50 @@ private:
 inline chunk_storage::chunk_storage(chunk_extent extent)
     : extent_{extent} {
     ensure_capacity();
+}
+
+inline chunk_storage::chunk_storage(chunk_storage&& other) noexcept
+    : extent_{other.extent_}
+    , voxels_{std::move(other.voxels_)}
+    , skylight_{std::move(other.skylight_)}
+    , blocklight_{std::move(other.blocklight_)}
+    , metadata_{std::move(other.metadata_)}
+    , compress_{std::move(other.compress_)}
+    , decompress_{std::move(other.decompress_)}
+    , dirty_{other.dirty_}
+    , compression_requested_{other.compression_requested_}
+    , compressed_{other.compressed_}
+    , compressed_blob_{std::move(other.compressed_blob_)} {
+    other.extent_ = chunk_extent{};
+    other.dirty_ = false;
+    other.compression_requested_ = false;
+    other.compressed_ = false;
+}
+
+inline chunk_storage& chunk_storage::operator=(chunk_storage&& other) noexcept {
+    if (this != &other) {
+        std::scoped_lock lock{compression_mutex_, other.compression_mutex_};
+        extent_ = other.extent_;
+        voxels_ = std::move(other.voxels_);
+        skylight_ = std::move(other.skylight_);
+        blocklight_ = std::move(other.blocklight_);
+        metadata_ = std::move(other.metadata_);
+        compress_ = std::move(other.compress_);
+        decompress_ = std::move(other.decompress_);
+        dirty_ = other.dirty_;
+        compression_requested_ = other.compression_requested_;
+        compressed_ = other.compressed_;
+        compressed_blob_ = std::move(other.compressed_blob_);
+
+        other.extent_ = chunk_extent{};
+        other.dirty_ = false;
+        other.compression_requested_ = false;
+        other.compressed_ = false;
+        other.compressed_blob_.clear();
+        other.compress_ = {};
+        other.decompress_ = {};
+    }
+    return *this;
 }
 
 inline span3d<voxel_id> chunk_storage::voxels() noexcept {

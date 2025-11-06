@@ -53,15 +53,21 @@ target_include_directories(almond_voxel
         $<INSTALL_INTERFACE:include/almond_voxel>
 )
 
-option(ALMOND_VOXEL_BUILD_EXAMPLES "Build Almond Voxel example targets" OFF)
-option(ALMOND_VOXEL_BUILD_BENCHMARKS "Build Almond Voxel benchmark targets" OFF)
+option(ALMOND_VOXEL_BUILD_EXAMPLES "Build Almond Voxel example targets" ON)
+option(ALMOND_VOXEL_BUILD_TESTS "Build Almond Voxel unit tests" ON)
+option(ALMOND_VOXEL_BUILD_BENCHMARKS "Build Almond Voxel benchmark targets" ON)
 
 if(ALMOND_VOXEL_BUILD_EXAMPLES)
-    message(STATUS "Example targets are currently placeholder entries.")
+    add_subdirectory(examples)
+endif()
+
+if(ALMOND_VOXEL_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
 endif()
 
 if(ALMOND_VOXEL_BUILD_BENCHMARKS)
-    message(STATUS "Benchmark targets are currently placeholder entries.")
+    add_subdirectory(benchmarks)
 endif()
 
 install(TARGETS almond_voxel EXPORT almond_voxelTargets)
