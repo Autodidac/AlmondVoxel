@@ -62,14 +62,14 @@ SDL_FColor shade_color(voxel_id id, const std::array<float, 3>& normal_values) {
 
     SDL_FColor base{};
     if (id == voxel_id{}) {
-        base = SDL_FColor{200, 200, 200, 255};
+        base = SDL_FColor{200.0f / 255.0f, 200.0f / 255.0f, 200.0f / 255.0f, 1.0f};
     } else {
-        base = SDL_FColor{90, 170, 90, 255};
+        base = SDL_FColor{90.0f / 255.0f, 170.0f / 255.0f, 90.0f / 255.0f, 1.0f};
     }
 
-    const auto scale_component = [intensity](std::uint8_t component) {
-        const float scaled = static_cast<float>(component) * intensity;
-        return static_cast<std::uint8_t>(std::clamp(scaled, 0.0f, 255.0f));
+    const auto scale_component = [intensity](float component) {
+        const float scaled = component * intensity;
+        return std::clamp(scaled, 0.0f, 1.0f);
     };
 
     base.r = scale_component(base.r);
