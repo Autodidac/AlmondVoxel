@@ -1,26 +1,26 @@
-# Project roadmap
+# AlmondVoxel roadmap
 
-This roadmap outlines planned enhancements to the Cpp20 Ultimate Project Template. Timelines are grouped by horizon to help contributors focus on the most impactful upgrades.
+This roadmap highlights the upcoming work required to evolve AlmondVoxel into a production-ready voxel foundation. Items are grouped by horizon and focus on capabilities that unlock new workflows for downstream engines.
 
-## Short-term (next 1–2 releases)
-- **Build tooling polish**: finalize cross-platform shell script parity and document invocation examples for popular IDE integrations.
-- **CI bootstrap**: add a GitHub Actions workflow that exercises the GCC and Clang build scripts on Linux and runs smoke tests on the sample executable.
-- **Sample module curation**: refactor `cmakeapp1` into a minimal demonstration that highlights dependency injection, logging, and configuration patterns.
-- **Documentation uplift**: link new docs (roadmap, API overview, changelog) from the README and include guidance for keeping them current.
+## Short-term (next release)
+- **Noise pipeline presets** – ship curated biome tables and noise stacks for desert, tundra, and volcanic regions.
+- **Mesh optimisation toggles** – expose compile-time flags for greedy mesher decimation and lightmap UV generation.
+- **Streaming sandbox polish** – add frustum culling visualisation, chunk residency overlays, and hot-reloadable configuration files.
+- **Documentation uplift** – extend platform guides with performance counters and profiling recipes.
 
 ## Mid-term (next quarter)
-- **Preset expansion**: extend `CMakePresets.json` to cover MSVC multi-config builds, cross-compilation targets, and sanitiser builds.
-- **Cache optimisation**: introduce ccache/sccache integration with automatic detection during configuration.
-- **CI matrix coverage**: configure GitHub Actions to run the test matrix across Windows, Linux, and macOS, with artifact uploads for binaries.
-- **Sample module gallery**: add optional modules demonstrating GUI integration (Qt/ImGui) and networking stacks with togglable build options.
+- **GPU meshing backend** – prototype a compute-shader mesher for Vulkan/DX12 targets with a CPU fallback.
+- **Region replication service** – provide an optional background service for synchronising region deltas over the network.
+- **Data-oriented storage** – experiment with struct-of-arrays chunk layouts to improve cache behaviour on dense edits.
+- **Continuous integration** – automate Linux/Windows builds that compile examples, run `voxel_tests`, and publish artefacts.
 
 ## Long-term (6–12 months)
-- **Template extensibility**: provide a plugin-style system for scaffolding new applications or libraries, with project generators powered by Python or CMake scripting.
-- **Enterprise-ready CI/CD**: publish reference pipelines for Azure DevOps and GitLab CI that mirror the GitHub Actions workflows, including caching and deployment steps.
-- **Ecosystem integrations**: support additional package managers (Conan, Hunter) and embed examples for cross-language bindings (Python, Rust, WASM).
-- **Sustainability processes**: establish release cadences, backward compatibility policies, and automated changelog generation.
+- **ECS bridge** – author adapters for popular ECS frameworks (EnTT, flecs) to stream voxel regions directly into gameplay loops.
+- **Editor integration** – package an Unreal/Unity plugin that consumes the header-only library for custom tooling.
+- **Procedural authoring toolkit** – build a node-based editor that exports AlmondVoxel configuration packs.
+- **Persistent world services** – define schemas and services for cloud-hosted region archives with delta compression.
 
-## Contributing to the roadmap
-- Open a discussion or issue describing proposed roadmap changes and reference concrete use cases.
-- When landing new features, update the relevant horizon with completed work or newly identified follow-up items.
-- Periodically review horizons to ensure items remain actionable and reflect community priorities.
+## Staying current
+- Propose roadmap additions or changes through GitHub discussions and link real-world scenarios that benefit from the work.
+- Update this document as features ship or scopes change to keep contributors aligned on priorities.
+- Reference the roadmap in release notes so downstream projects know when to adopt new modules.
