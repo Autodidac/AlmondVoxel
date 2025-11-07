@@ -333,7 +333,7 @@ int main() {
         return 1;
     }
 
-    SDL_Window* window = SDL_CreateWindow("Almond Voxel Terrain", 1280, 720, SDL_WINDOW_RESIZABLE);
+    SDL_Window* window = SDL_CreateWindow("Almond Voxel Terrain", 2560, 1440, SDL_WINDOW_RESIZABLE);
     if (window == nullptr) {
         std::cerr << "Failed to create SDL window: " << SDL_GetError() << "\n";
         SDL_Quit();
