@@ -2,7 +2,7 @@
 #include "almond_voxel/meshing/greedy_mesher.hpp"
 #include "almond_voxel/meshing/marching_cubes.hpp"
 
-#include "test_framework.hpp"
+#include "../tests/test_framework.hpp"
 
 #define SDL_MAIN_HANDLED
 
