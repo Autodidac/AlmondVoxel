@@ -23,6 +23,10 @@ inline void register_test(std::string name, std::function<void()> func) {
     registry().push_back(test_case{std::move(name), std::move(func)});
 }
 
+inline bool has_registered_tests() {
+    return !registry().empty();
+}
+
 struct test_failure : std::exception {
     explicit test_failure(std::string message)
         : message_{std::move(message)} { }
