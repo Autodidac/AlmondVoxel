@@ -127,7 +127,7 @@ TEST_CASE(marching_cubes_triangle_orientation) {
     const auto normal = cross(edge(v0.position, v2.position), edge(v0.position, v1.position));
     const std::array<float, 3> view{1.0f - v0.position[0], 1.0f - v0.position[1], 1.0f - v0.position[2]};
 
-    CHECK(dot(normal, view) > 0.0f);
+    CHECK(dot(normal, view) < 0.0f);
 }
 
 TEST_CASE(marching_cubes_from_chunk_binary) {

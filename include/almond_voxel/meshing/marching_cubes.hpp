@@ -158,12 +158,12 @@ template <typename DensitySampler, typename MaterialSampler>
                     const auto& p0 = edge_vertices[a0];
                     const auto& p1 = edge_vertices[a1];
                     const auto& p2 = edge_vertices[a2];
-                    const auto normal = detail::compute_normal(p0, p1, p2);
+                    const auto normal = detail::compute_normal(p0, p2, p1);
 
                     const auto base_index = static_cast<std::uint32_t>(result.vertices.size());
                     result.vertices.push_back(vertex{p0, normal, {p0[0], p0[1]}, material});
-                    result.vertices.push_back(vertex{p1, normal, {p1[0], p1[1]}, material});
                     result.vertices.push_back(vertex{p2, normal, {p2[0], p2[1]}, material});
+                    result.vertices.push_back(vertex{p1, normal, {p1[0], p1[1]}, material});
                     result.indices.insert(result.indices.end(), {base_index, base_index + 1, base_index + 2});
                 }
             }
