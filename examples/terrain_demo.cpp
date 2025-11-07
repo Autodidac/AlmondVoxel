@@ -2,6 +2,8 @@
 #include "almond_voxel/meshing/greedy_mesher.hpp"
 #include "almond_voxel/meshing/marching_cubes.hpp"
 
+#include "test_framework.hpp"
+
 #define SDL_MAIN_HANDLED
 
 #include <SDL3/SDL.h>
@@ -11,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <iostream>
 #include <string_view>
 #include <unordered_map>
@@ -375,6 +378,13 @@ int main(int argc, char** argv) {
         }
     }
 
+    try {
+        test::run_tests();
+    } catch (const std::exception& ex) {
+        std::cerr << "Test suite failed: " << ex.what() << "\n";
+        return 1;
+    }
+
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << "Failed to initialise SDL: " << SDL_GetError() << "\n";
         return 1;
@@ -534,7 +544,7 @@ int main(int argc, char** argv) {
                 const float3 p0 = world_position(chunk, mesh.vertices[i0]);
                 const float3 p1 = world_position(chunk, mesh.vertices[i1]);
                 const float3 p2 = world_position(chunk, mesh.vertices[i2]);
-                float3 face_normal = cross(subtract(p1, p0), subtract(p2, p0));
+                float3 face_normal = cross(subtract(p2, p0), subtract(p1, p0));
                 if (length_squared(face_normal) > 0.0f) {
                     face_normal = normalize(face_normal);
                     const float3 view_vector = subtract(cam.position, p0);

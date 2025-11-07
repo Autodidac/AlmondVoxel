@@ -5,6 +5,7 @@
 
 #include "almond_voxel/chunk.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cmath>
 
@@ -76,6 +77,57 @@ TEST_CASE(marching_cubes_single_triangle) {
     for (const auto& vertex : mesh.vertices) {
         CHECK(vertex.id == material);
     }
+}
+
+TEST_CASE(marching_cubes_triangle_orientation) {
+    const chunk_extent extent{1, 1, 1};
+    const float field[2][2][2] = {
+        {
+            {0.0f, 1.0f},
+            {1.0f, 1.0f}
+        },
+        {
+            {1.0f, 1.0f},
+            {1.0f, 1.0f}
+        }
+    };
+
+    auto density = [&](std::size_t x, std::size_t y, std::size_t z) {
+        return field[x][y][z];
+    };
+
+    const auto mesh = meshing::marching_cubes(extent, density,
+        [](std::size_t, std::size_t, std::size_t) { return voxel_id{1}; });
+
+    REQUIRE(mesh.indices.size() == 3);
+    const auto& v0 = mesh.vertices[mesh.indices[0]];
+    const auto& v1 = mesh.vertices[mesh.indices[1]];
+    const auto& v2 = mesh.vertices[mesh.indices[2]];
+
+    const auto edge = [](const std::array<float, 3>& a, const std::array<float, 3>& b) {
+        return std::array<float, 3>{
+            b[0] - a[0],
+            b[1] - a[1],
+            b[2] - a[2]
+        };
+    };
+
+    const auto cross = [](const std::array<float, 3>& a, const std::array<float, 3>& b) {
+        return std::array<float, 3>{
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0]
+        };
+    };
+
+    const auto dot = [](const std::array<float, 3>& a, const std::array<float, 3>& b) {
+        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    };
+
+    const auto normal = cross(edge(v0.position, v2.position), edge(v0.position, v1.position));
+    const std::array<float, 3> view{1.0f - v0.position[0], 1.0f - v0.position[1], 1.0f - v0.position[2]};
+
+    CHECK(dot(normal, view) > 0.0f);
 }
 
 TEST_CASE(marching_cubes_from_chunk_binary) {
