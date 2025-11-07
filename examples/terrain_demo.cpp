@@ -145,7 +145,7 @@ int main() {
     const auto mesh = meshing::greedy_mesh(chunk);
     print_statistics(mesh);
 
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         std::cerr << "Failed to initialise SDL: " << SDL_GetError() << "\n";
         return 1;
     }
@@ -157,9 +157,17 @@ int main() {
         return 1;
     }
 
-    SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (renderer == nullptr) {
         std::cerr << "Failed to create SDL renderer: " << SDL_GetError() << "\n";
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
+    if (!SDL_RendererHasFeature(renderer, SDL_RENDERER_FEATURE_RENDER_GEOMETRY)) {
+        std::cerr << "SDL renderer does not support geometry rendering" << std::endl;
+        SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
