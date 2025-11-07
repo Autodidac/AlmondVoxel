@@ -1,5 +1,6 @@
 #include "almond_voxel/world.hpp"
 #include "almond_voxel/meshing/greedy_mesher.hpp"
+#include "almond_voxel/meshing/marching_cubes.hpp"
 
 #define SDL_MAIN_HANDLED
 
@@ -11,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -18,6 +20,11 @@
 
 namespace {
 using namespace almond::voxel;
+
+enum class mesher_choice {
+    greedy,
+    marching
+};
 
 struct float3 {
     float x{};
@@ -185,6 +192,7 @@ struct chunk_mesh_entry {
     std::vector<SDL_FColor> colors{};
     std::array<std::int64_t, 3> origin{};
     int cell_size{1};
+    mesher_choice mode{mesher_choice::greedy};
 };
 
 struct lod_definition {
@@ -230,7 +238,11 @@ bool cell_is_solid(const std::array<std::int64_t, 3>& origin, int cell_size, con
     return sample_z < terrain;
 }
 
-chunk_mesh_entry build_chunk_mesh(const chunk_extent& extent, const std::array<std::int64_t, 3>& origin, int cell_size) {
+chunk_mesh_entry build_chunk_mesh(
+    const chunk_extent& extent,
+    const std::array<std::int64_t, 3>& origin,
+    int cell_size,
+    mesher_choice mode) {
     chunk_storage chunk{extent};
     auto voxels = chunk.voxels();
     for (std::uint32_t z = 0; z < extent.z; ++z) {
@@ -246,13 +258,48 @@ chunk_mesh_entry build_chunk_mesh(const chunk_extent& extent, const std::array<s
         }
     }
 
-    auto is_opaque = [](voxel_id id) { return id != voxel_id{}; };
-    auto neighbor_sampler = [&](const std::array<std::ptrdiff_t, 3>& coord) {
-        return cell_is_solid(origin, cell_size, coord);
-    };
-
     chunk_mesh_entry entry{};
-    entry.mesh = meshing::greedy_mesh_with_neighbors(chunk, is_opaque, neighbor_sampler);
+    entry.mode = mode;
+
+    if (mode == mesher_choice::marching) {
+        auto density_sampler = [&](std::size_t vx, std::size_t vy, std::size_t vz) {
+            float total = 0.0f;
+            int count = 0;
+            for (int dx = -1; dx <= 0; ++dx) {
+                for (int dy = -1; dy <= 0; ++dy) {
+                    for (int dz = -1; dz <= 0; ++dz) {
+                        std::array<std::ptrdiff_t, 3> coord{
+                            static_cast<std::ptrdiff_t>(vx) + dx,
+                            static_cast<std::ptrdiff_t>(vy) + dy,
+                            static_cast<std::ptrdiff_t>(vz) + dz
+                        };
+                        if (cell_is_solid(origin, cell_size, coord)) {
+                            total += 1.0f;
+                        }
+                        ++count;
+                    }
+                }
+            }
+            if (count == 0) {
+                return 0.0f;
+            }
+            return total / static_cast<float>(count);
+        };
+
+        auto material_sampler = [voxels](std::size_t x, std::size_t y, std::size_t z) {
+            return voxels(x, y, z);
+        };
+
+        meshing::marching_cubes_config config{};
+        config.iso_value = 0.5f;
+        entry.mesh = meshing::marching_cubes(extent, density_sampler, material_sampler, config);
+    } else {
+        auto is_opaque = [](voxel_id id) { return id != voxel_id{}; };
+        auto neighbor_sampler = [&](const std::array<std::ptrdiff_t, 3>& coord) {
+            return cell_is_solid(origin, cell_size, coord);
+        };
+        entry.mesh = meshing::greedy_mesh_with_neighbors(chunk, is_opaque, neighbor_sampler);
+    }
     entry.world_positions.resize(entry.mesh.vertices.size());
     entry.colors.resize(entry.mesh.vertices.size());
     entry.origin = origin;
@@ -272,7 +319,7 @@ chunk_mesh_entry build_chunk_mesh(const chunk_extent& extent, const std::array<s
 }
 
 void update_required_chunks(const camera& cam, const chunk_extent& extent, const std::array<lod_definition, 3>& lods,
-    std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash>& cache) {
+    mesher_choice mode, std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash>& cache) {
     std::unordered_set<chunk_instance_key, chunk_instance_hash> needed;
 
     for (const auto& lod : lods) {
@@ -306,8 +353,11 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
 
                 const chunk_instance_key key{region, lod.level};
                 if (needed.insert(key).second) {
-                    if (cache.find(key) == cache.end()) {
-                        cache.emplace(key, build_chunk_mesh(extent, origin, lod.cell_size));
+                    auto it = cache.find(key);
+                    if (it == cache.end()) {
+                        cache.emplace(key, build_chunk_mesh(extent, origin, lod.cell_size, mode));
+                    } else if (it->second.mode != mode) {
+                        it->second = build_chunk_mesh(extent, origin, lod.cell_size, mode);
                     }
                 }
             }
@@ -325,8 +375,18 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     using namespace almond::voxel;
+
+    mesher_choice mesher_mode = mesher_choice::greedy;
+    for (int i = 1; i < argc; ++i) {
+        std::string_view arg{argv[i]};
+        if (arg == "--marching-cubes" || arg == "--mesher=marching") {
+            mesher_mode = mesher_choice::marching;
+        } else if (arg == "--mesher=greedy") {
+            mesher_mode = mesher_choice::greedy;
+        }
+    }
 
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         std::cerr << "Failed to initialise SDL: " << SDL_GetError() << "\n";
@@ -385,6 +445,11 @@ int main() {
                 } else if (event.key.key == SDLK_F1) {
                     mouse_captured = !mouse_captured;
                     SDL_SetWindowRelativeMouseMode(window, mouse_captured ? true : false);
+                } else if (event.key.key == SDLK_m) {
+                    mesher_mode = mesher_mode == mesher_choice::greedy ? mesher_choice::marching : mesher_choice::greedy;
+                    chunk_meshes.clear();
+                    std::cout << "Switched mesher to "
+                              << (mesher_mode == mesher_choice::greedy ? "greedy" : "marching cubes") << "\n";
                 }
             } else if (event.type == SDL_EVENT_MOUSE_MOTION && mouse_captured) {
                 const float sensitivity = 0.0025f;
@@ -447,7 +512,7 @@ int main() {
             cam.position = add(cam.position, scale(move_delta, move_speed * delta_seconds));
         }
 
-        update_required_chunks(cam, chunk_dimensions, lods, chunk_meshes);
+        update_required_chunks(cam, chunk_dimensions, lods, mesher_mode, chunk_meshes);
 
         SDL_SetRenderDrawColor(renderer, 25, 25, 35, 255);
         SDL_RenderClear(renderer);

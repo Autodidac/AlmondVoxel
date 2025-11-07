@@ -2,6 +2,8 @@
 
 #include "almond_voxel/chunk.hpp"
 #include "almond_voxel/core.hpp"
+#include "almond_voxel/meshing/mesh_types.hpp"
+#include "almond_voxel/meshing/neighbors.hpp"
 
 #include <array>
 #include <cstddef>
@@ -10,18 +12,6 @@
 #include <vector>
 
 namespace almond::voxel::meshing {
-
-struct vertex {
-    std::array<float, 3> position{};
-    std::array<float, 3> normal{};
-    std::array<float, 2> uv{};
-    voxel_id id{0};
-};
-
-struct mesh_result {
-    std::vector<vertex> vertices;
-    std::vector<std::uint32_t> indices;
-};
 
 template <typename IsOpaque, typename NeighborOpaque>
 [[nodiscard]] mesh_result greedy_mesh_with_neighbors(const chunk_storage& chunk, IsOpaque&& is_opaque,
@@ -177,6 +167,28 @@ template <typename IsOpaque, typename NeighborOpaque>
     }
 
     return result;
+}
+
+template <typename IsOpaque>
+[[nodiscard]] mesh_result greedy_mesh_with_neighbor_chunks(const chunk_storage& chunk, const chunk_neighbors& neighbors,
+    IsOpaque&& is_opaque) {
+    const auto neighbor_views = detail::load_neighbor_views(neighbors);
+    auto neighbor_sampler = [&, dims = chunk.extent()](const std::array<std::ptrdiff_t, 3>& coord) {
+        std::array<std::ptrdiff_t, 3> local = coord;
+        const detail::neighbor_view* view = nullptr;
+        if (!detail::remap_to_neighbor_coords(dims, local, neighbor_views, view)) {
+            return false;
+        }
+
+        return is_opaque(view->voxels(static_cast<std::size_t>(local[0]), static_cast<std::size_t>(local[1]),
+            static_cast<std::size_t>(local[2])));
+    };
+
+    return greedy_mesh_with_neighbors(chunk, std::forward<IsOpaque>(is_opaque), neighbor_sampler);
+}
+
+inline mesh_result greedy_mesh_with_neighbor_chunks(const chunk_storage& chunk, const chunk_neighbors& neighbors) {
+    return greedy_mesh_with_neighbor_chunks(chunk, neighbors, [](voxel_id id) { return id != voxel_id{}; });
 }
 
 template <typename IsOpaque>
