@@ -76,9 +76,9 @@ inline std::array<float, 3> compute_normal(const std::array<float, 3>& p0, const
     };
 
     std::array<float, 3> normal{
-        u[1] * v[2] - u[2] * v[1],
-        u[2] * v[0] - u[0] * v[2],
-        u[0] * v[1] - u[1] * v[0]
+        v[1] * u[2] - v[2] * u[1],
+        v[2] * u[0] - v[0] * u[2],
+        v[0] * u[1] - v[1] * u[0]
     };
 
     const float length_sq = normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2];

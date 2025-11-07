@@ -1,11 +1,6 @@
-set(TEST_SOURCES
-    test_main.cpp
-    chunk_tests.cpp
-    meshing_tests.cpp
-    serialization_tests.cpp
-)
+include(test_sources.cmake)
 
-add_executable(almond_voxel_tests ${TEST_SOURCES})
+add_executable(almond_voxel_tests test_main.cpp ${ALMOND_VOXEL_TEST_CASE_SOURCES})
 
 target_link_libraries(almond_voxel_tests PRIVATE almond_voxel)
 
