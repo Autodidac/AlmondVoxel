@@ -76,7 +76,7 @@ float dot(float3 a, float3 b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
-SDL_FColor shade_color(voxel_id id, const std::array<float, 3>& normal_values) {
+SDL_FColor shade_color(voxel_id id, const std::array<float, 3>& normal_values, mesher_choice mode) {
     const float3 normal = normalize(to_float3(normal_values));
     const float3 light = normalize(float3{0.6f, 0.9f, 0.5f});
     const float diffuse = std::max(dot(normal, light), 0.0f);
@@ -84,7 +84,9 @@ SDL_FColor shade_color(voxel_id id, const std::array<float, 3>& normal_values) {
     const float intensity = std::clamp(ambient + diffuse * 0.65f, 0.0f, 1.0f);
 
     SDL_FColor base{};
-    if (id == voxel_id{}) {
+    if (mode == mesher_choice::marching) {
+        base = SDL_FColor{210.0f / 255.0f, 210.0f / 255.0f, 210.0f / 255.0f, 1.0f};
+    } else if (id == voxel_id{}) {
         base = SDL_FColor{200.0f / 255.0f, 200.0f / 255.0f, 200.0f / 255.0f, 1.0f};
     } else {
         base = SDL_FColor{90.0f / 255.0f, 170.0f / 255.0f, 90.0f / 255.0f, 1.0f};
@@ -298,6 +300,8 @@ chunk_mesh_entry build_chunk_mesh(
 void update_required_chunks(const camera& cam, const chunk_extent& extent, const std::array<lod_definition, 3>& lods,
     mesher_choice mode, std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash>& cache) {
     std::unordered_set<chunk_instance_key, chunk_instance_hash> needed;
+    const std::size_t build_budget = mode == mesher_choice::marching ? 2 : 4;
+    std::size_t builds_this_frame = 0;
 
     for (const auto& lod : lods) {
         const float chunk_size = static_cast<float>(extent.x * lod.cell_size);
@@ -332,9 +336,17 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
                 if (needed.insert(key).second) {
                     auto it = cache.find(key);
                     if (it == cache.end()) {
+                        if (builds_this_frame >= build_budget) {
+                            continue;
+                        }
                         cache.emplace(key, build_chunk_mesh(extent, origin, lod.cell_size, mode));
+                        ++builds_this_frame;
                     } else if (it->second.mode != mode) {
+                        if (builds_this_frame >= build_budget) {
+                            continue;
+                        }
                         it->second = build_chunk_mesh(extent, origin, lod.cell_size, mode);
+                        ++builds_this_frame;
                     }
                 }
             }
@@ -561,7 +573,7 @@ int main(int argc, char** argv) {
 
                     SDL_Vertex v{};
                     v.position = projected.point;
-                    v.color = shade_color(mesh.vertices[idx].id, mesh.vertices[idx].normal);
+                    v.color = shade_color(mesh.vertices[idx].id, mesh.vertices[idx].normal, chunk.mode);
                     v.tex_coord = SDL_FPoint{0.0f, 0.0f};
                     tri.vertices[corner] = v;
                     depth_sum += projected.depth;
