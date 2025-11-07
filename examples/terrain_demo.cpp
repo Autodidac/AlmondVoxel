@@ -4,19 +4,17 @@
 #define SDL_MAIN_HANDLED
 
 #include <SDL3/SDL.h>
-//#include <SDL3/SDL_main.h>
-//#include <SDL3/SDL_opengl.h>
-//#include <GL/glu.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
-#include <iomanip>
 #include <iostream>
-#include <numeric>
-#include <vector>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace {
 using namespace almond::voxel;
@@ -44,7 +42,11 @@ float3 scale(float3 v, float s) {
 }
 
 float3 cross(float3 a, float3 b) {
-    return float3{a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+    return float3{
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    };
 }
 
 float length_squared(float3 v) {
@@ -93,7 +95,7 @@ struct camera {
     float pitch{};
     float fov{70.0f * 3.14159265f / 180.0f};
     float near_plane{0.1f};
-    float far_plane{512.0f};
+    float far_plane{1500.0f};
 };
 
 struct camera_vectors {
@@ -130,7 +132,8 @@ struct projection_result {
     bool visible{};
 };
 
-projection_result project_perspective(float3 position, const camera& cam, const camera_vectors& vectors, int width, int height) {
+projection_result project_perspective(float3 position, const camera& cam, const camera_vectors& vectors, int width, int height)
+{
     projection_result result{};
     const float3 relative = subtract(position, cam.position);
     const float x = dot(relative, vectors.right);
@@ -161,18 +164,37 @@ struct projected_triangle {
     float depth{};
 };
 
-constexpr std::array<float3, 8> voxel_corners{std::to_array<float3>({
-    float3{0.0f, 0.0f, 0.0f},
-    float3{1.0f, 0.0f, 0.0f},
-    float3{0.0f, 1.0f, 0.0f},
-    float3{1.0f, 1.0f, 0.0f},
-    float3{0.0f, 0.0f, 1.0f},
-    float3{1.0f, 0.0f, 1.0f},
-    float3{0.0f, 1.0f, 1.0f},
-    float3{1.0f, 1.0f, 1.0f},
-})};
+struct chunk_instance_key {
+    region_key region{};
+    int lod{0};
 
-constexpr std::array<std::pair<int, int>, 12> voxel_edges{std::to_array<std::pair<int, int>>({
+    [[nodiscard]] friend bool operator==(const chunk_instance_key&, const chunk_instance_key&) noexcept = default;
+};
+
+struct chunk_instance_hash {
+    [[nodiscard]] std::size_t operator()(const chunk_instance_key& key) const noexcept {
+        std::size_t seed = region_key_hash{}(key.region);
+        seed ^= static_cast<std::size_t>(key.lod) + 0x9E3779B185EBCA87ull + (seed << 6) + (seed >> 2);
+        return seed;
+    }
+};
+
+struct chunk_mesh_entry {
+    meshing::mesh_result mesh{};
+    std::vector<float3> world_positions{};
+    std::vector<SDL_FColor> colors{};
+    std::array<std::int64_t, 3> origin{};
+    int cell_size{1};
+};
+
+struct lod_definition {
+    int level{0};
+    float min_distance{0.0f};
+    float max_distance{0.0f};
+    int cell_size{1};
+};
+
+constexpr std::array<std::pair<int, int>, 12> box_edges{std::to_array<std::pair<int, int>>({
     std::pair{0, 1},
     std::pair{1, 3},
     std::pair{3, 2},
@@ -187,62 +209,126 @@ constexpr std::array<std::pair<int, int>, 12> voxel_edges{std::to_array<std::pai
     std::pair{3, 7},
 })};
 
-void generate_heightmap(chunk_storage& chunk) {
-    const auto extent = chunk.extent();
-    auto voxels = chunk.voxels();
-    const float scale_x = 2.0f / static_cast<float>(extent.x);
-    const float scale_y = 2.0f / static_cast<float>(extent.y);
+double terrain_height(double x, double y) {
+    const double large_scale = std::sin(x * 0.005) * 30.0 + std::cos(y * 0.005) * 28.0;
+    const double medium_scale = std::sin(x * 0.04 + y * 0.03) * 12.0;
+    const double ridge = std::sin(x * 0.12) * std::cos(y * 0.11) * 4.0;
+    const double valley = std::cos(x * 0.017 + y * 0.02) * 6.0;
+    const double height = 48.0 + large_scale + medium_scale + ridge + valley;
+    return std::clamp(height, 4.0, 88.0);
+}
 
+double sample_coordinate(std::int64_t origin, std::ptrdiff_t index, int cell_size) {
+    return static_cast<double>(origin) + (static_cast<double>(index) + 0.5) * static_cast<double>(cell_size);
+}
+
+bool cell_is_solid(const std::array<std::int64_t, 3>& origin, int cell_size, const std::array<std::ptrdiff_t, 3>& coord) {
+    const double sample_x = sample_coordinate(origin[0], coord[0], cell_size);
+    const double sample_y = sample_coordinate(origin[1], coord[1], cell_size);
+    const double terrain = terrain_height(sample_x, sample_y);
+    const double sample_z = static_cast<double>(origin[2]) + (static_cast<double>(coord[2]) + 0.5);
+    return sample_z < terrain;
+}
+
+chunk_mesh_entry build_chunk_mesh(const chunk_extent& extent, const std::array<std::int64_t, 3>& origin, int cell_size) {
+    chunk_storage chunk{extent};
+    auto voxels = chunk.voxels();
     for (std::uint32_t z = 0; z < extent.z; ++z) {
         for (std::uint32_t y = 0; y < extent.y; ++y) {
             for (std::uint32_t x = 0; x < extent.x; ++x) {
-                voxels(x, y, z) = voxel_id{};
+                std::array<std::ptrdiff_t, 3> coord{
+                    static_cast<std::ptrdiff_t>(x),
+                    static_cast<std::ptrdiff_t>(y),
+                    static_cast<std::ptrdiff_t>(z)
+                };
+                voxels(x, y, z) = cell_is_solid(origin, cell_size, coord) ? voxel_id{1} : voxel_id{};
             }
         }
     }
 
-    for (std::uint32_t y = 0; y < extent.y; ++y) {
-        for (std::uint32_t x = 0; x < extent.x; ++x) {
-            const float fx = static_cast<float>(x) * scale_x - 1.0f;
-            const float fy = static_cast<float>(y) * scale_y - 1.0f;
-            const float height = (std::sin(fx * 3.14159f) + std::cos(fy * 3.14159f)) * 0.25f + 0.5f;
-            const std::uint32_t max_z = static_cast<std::uint32_t>(std::clamp(height * static_cast<float>(extent.z), 0.0f,
-                static_cast<float>(extent.z)));
-            for (std::uint32_t z = 0; z < max_z && z < extent.z; ++z) {
-                voxels(x, y, z) = voxel_id{1};
+    auto is_opaque = [](voxel_id id) { return id != voxel_id{}; };
+    auto neighbor_sampler = [&](const std::array<std::ptrdiff_t, 3>& coord) {
+        return cell_is_solid(origin, cell_size, coord);
+    };
+
+    chunk_mesh_entry entry{};
+    entry.mesh = meshing::greedy_mesh_with_neighbors(chunk, is_opaque, neighbor_sampler);
+    entry.world_positions.resize(entry.mesh.vertices.size());
+    entry.colors.resize(entry.mesh.vertices.size());
+    entry.origin = origin;
+    entry.cell_size = cell_size;
+
+    for (std::size_t i = 0; i < entry.mesh.vertices.size(); ++i) {
+        const auto& vertex = entry.mesh.vertices[i];
+        entry.world_positions[i] = float3{
+            static_cast<float>(origin[0]) + static_cast<float>(vertex.position[0]) * static_cast<float>(cell_size),
+            static_cast<float>(origin[1]) + static_cast<float>(vertex.position[1]) * static_cast<float>(cell_size),
+            static_cast<float>(origin[2]) + vertex.position[2]
+        };
+        entry.colors[i] = shade_color(vertex.id, vertex.normal);
+    }
+
+    return entry;
+}
+
+void update_required_chunks(const camera& cam, const chunk_extent& extent, const std::array<lod_definition, 3>& lods,
+    std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash>& cache) {
+    std::unordered_set<chunk_instance_key, chunk_instance_hash> needed;
+
+    for (const auto& lod : lods) {
+        const float chunk_size = static_cast<float>(extent.x * lod.cell_size);
+        if (chunk_size <= 0.0f) {
+            continue;
+        }
+
+        const int base_x = static_cast<int>(std::floor(cam.position.x / chunk_size));
+        const int base_y = static_cast<int>(std::floor(cam.position.y / chunk_size));
+        const int radius = static_cast<int>(std::ceil(lod.max_distance / chunk_size)) + 1;
+
+        for (int dy = -radius; dy <= radius; ++dy) {
+            for (int dx = -radius; dx <= radius; ++dx) {
+                region_key region{base_x + dx, base_y + dy, 0};
+                const std::array<std::int64_t, 3> origin{
+                    static_cast<std::int64_t>(region.x) * static_cast<std::int64_t>(extent.x) * lod.cell_size,
+                    static_cast<std::int64_t>(region.y) * static_cast<std::int64_t>(extent.y) * lod.cell_size,
+                    static_cast<std::int64_t>(region.z) * static_cast<std::int64_t>(extent.z)
+                };
+
+                const float center_x = static_cast<float>(origin[0]) + chunk_size * 0.5f;
+                const float center_y = static_cast<float>(origin[1]) + chunk_size * 0.5f;
+                const float dx_world = center_x - cam.position.x;
+                const float dy_world = center_y - cam.position.y;
+                const float distance = std::sqrt(dx_world * dx_world + dy_world * dy_world);
+
+                if (distance < lod.min_distance || distance > lod.max_distance) {
+                    continue;
+                }
+
+                const chunk_instance_key key{region, lod.level};
+                if (needed.insert(key).second) {
+                    if (cache.find(key) == cache.end()) {
+                        cache.emplace(key, build_chunk_mesh(extent, origin, lod.cell_size));
+                    }
+                }
             }
+        }
+    }
+
+    for (auto it = cache.begin(); it != cache.end();) {
+        if (needed.contains(it->first)) {
+            ++it;
+        } else {
+            it = cache.erase(it);
         }
     }
 }
 
-void print_statistics(const meshing::mesh_result& mesh) {
-    std::uint64_t checksum = 0;
-    for (const auto& vertex : mesh.vertices) {
-        checksum += static_cast<std::uint64_t>(vertex.position[0] * 17.0f + vertex.position[1] * 31.0f + vertex.position[2] * 47.0f)
-            + vertex.id;
-    }
-    std::cout << "Terrain demo results\n";
-    std::cout << "  Vertices : " << mesh.vertices.size() << "\n";
-    std::cout << "  Indices  : " << mesh.indices.size() << "\n";
-    std::cout << "  Checksum : 0x" << std::hex << checksum << std::dec << "\n";
-    std::cout << "Press ESC or close the window to exit." << std::endl;
-}
 } // namespace
 
 int main() {
     using namespace almond::voxel;
 
-    region_manager world{cubic_extent(32)};
-    const region_key key{0, 0, 0};
-    auto& chunk = world.assure(key);
-
-    chunk.fill(voxel_id{});
-    generate_heightmap(chunk);
-
-    const auto mesh = meshing::greedy_mesh(chunk);
-    print_statistics(mesh);
-
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
+    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         std::cerr << "Failed to initialise SDL: " << SDL_GetError() << "\n";
         return 1;
     }
@@ -262,33 +348,27 @@ int main() {
         return 1;
     }
 
-    //if (!SDL_RendererHasFeature(renderer, SDL_RENDERER_FEATURE_RENDER_GEOMETRY)) {
-    //    std::cerr << "SDL renderer does not support geometry rendering" << std::endl;
-    //    SDL_DestroyRenderer(renderer);
-    //    SDL_DestroyWindow(window);
-    //    SDL_Quit();
-    //    return 1;
-    //}
-
-    const auto extent = chunk.extent();
-    const float3 center{static_cast<float>(extent.x) * 0.5f, static_cast<float>(extent.y) * 0.5f, static_cast<float>(extent.z) * 0.5f};
+    const chunk_extent chunk_dimensions{32, 32, 96};
+    const std::array<lod_definition, 3> lods{
+        lod_definition{0, 0.0f, 200.0f, 1},
+        lod_definition{1, 180.0f, 480.0f, 2},
+        lod_definition{2, 440.0f, 1400.0f, 4},
+    };
 
     camera cam{};
-    cam.position = float3{center.x, -static_cast<float>(extent.y) * 0.75f, center.z + 10.0f};
+    cam.position = float3{0.0f, -180.0f, 90.0f};
     cam.yaw = 0.0f;
-    cam.pitch = -0.35f;
+    cam.pitch = -0.45f;
 
     bool running = true;
     bool debug_view = false;
     bool mouse_captured = true;
     std::uint64_t previous_ticks = SDL_GetTicks();
 
-    std::vector<projected_triangle> triangles;
-    triangles.reserve(mesh.indices.size() / 3);
-    std::vector<SDL_Vertex> draw_vertices;
-    draw_vertices.reserve(mesh.indices.size());
+    std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash> chunk_meshes;
 
-    auto voxels = chunk.voxels();
+    std::vector<projected_triangle> triangles;
+    std::vector<SDL_Vertex> draw_vertices;
 
     SDL_SetWindowRelativeMouseMode(window, true);
 
@@ -331,7 +411,7 @@ int main() {
         const camera_vectors vectors = compute_camera_vectors(cam);
 
         const bool* keyboard = SDL_GetKeyboardState(nullptr);
-        float move_speed = keyboard[SDL_SCANCODE_LSHIFT] ? 25.0f : 10.0f;
+        float move_speed = keyboard[SDL_SCANCODE_LSHIFT] ? 45.0f : 15.0f;
         float3 move_delta{};
         float3 planar_forward{vectors.forward.x, vectors.forward.y, 0.0f};
         if (length_squared(planar_forward) > 1e-6f) {
@@ -367,45 +447,73 @@ int main() {
             cam.position = add(cam.position, scale(move_delta, move_speed * delta_seconds));
         }
 
+        update_required_chunks(cam, chunk_dimensions, lods, chunk_meshes);
+
         SDL_SetRenderDrawColor(renderer, 25, 25, 35, 255);
         SDL_RenderClear(renderer);
 
+        std::size_t total_triangles = 0;
+        for (const auto& [key, chunk] : chunk_meshes) {
+            (void)key;
+            total_triangles += chunk.mesh.indices.size() / 3;
+        }
+
         triangles.clear();
-        for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
-            projected_triangle tri{};
-            bool visible = true;
-            float depth_sum = 0.0f;
-            for (std::size_t corner = 0; corner < 3; ++corner) {
-                const auto& src_vertex = mesh.vertices[mesh.indices[i + corner]];
-                const float3 position = to_float3(src_vertex.position);
-                const projection_result projected = project_perspective(position, cam, vectors, output_width, output_height);
-                if (!projected.visible) {
-                    visible = false;
-                    break;
+        triangles.reserve(total_triangles);
+        draw_vertices.clear();
+        draw_vertices.reserve(total_triangles * 3);
+
+        for (const auto& [key, chunk] : chunk_meshes) {
+            (void)key;
+            const auto& mesh = chunk.mesh;
+            for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+                const std::uint32_t i0 = mesh.indices[i];
+                const std::uint32_t i1 = mesh.indices[i + 1];
+                const std::uint32_t i2 = mesh.indices[i + 2];
+
+                const float3 normal = to_float3(mesh.vertices[i0].normal);
+                if (length_squared(normal) > 0.0f) {
+                    const float3 view_vector = subtract(cam.position, chunk.world_positions[i0]);
+                    if (dot(normal, view_vector) <= 0.0f) {
+                        continue;
+                    }
                 }
 
-                SDL_Vertex v{};
-                v.position = projected.point;
-                v.color = shade_color(src_vertex.id, src_vertex.normal);
-                v.tex_coord = SDL_FPoint{0.0f, 0.0f};
-                tri.vertices[corner] = v;
-                depth_sum += projected.depth;
-            }
+                projected_triangle tri{};
+                bool visible = true;
+                float depth_sum = 0.0f;
+                const std::array<std::uint32_t, 3> indices{i0, i1, i2};
 
-            if (!visible) {
-                continue;
-            }
+                for (std::size_t corner = 0; corner < indices.size(); ++corner) {
+                    const std::uint32_t idx = indices[corner];
+                    const float3& position = chunk.world_positions[idx];
+                    const projection_result projected = project_perspective(position, cam, vectors, output_width, output_height);
+                    if (!projected.visible) {
+                        visible = false;
+                        break;
+                    }
 
-            tri.depth = depth_sum / 3.0f;
-            triangles.push_back(tri);
+                    SDL_Vertex v{};
+                    v.position = projected.point;
+                    v.color = chunk.colors[idx];
+                    v.tex_coord = SDL_FPoint{0.0f, 0.0f};
+                    tri.vertices[corner] = v;
+                    depth_sum += projected.depth;
+                }
+
+                if (!visible) {
+                    continue;
+                }
+
+                tri.depth = depth_sum / 3.0f;
+                triangles.push_back(tri);
+            }
         }
 
         std::sort(triangles.begin(), triangles.end(), [](const projected_triangle& a, const projected_triangle& b) {
             return a.depth > b.depth;
         });
 
-        draw_vertices.clear();
-        draw_vertices.reserve(triangles.size() * 3);
         for (const auto& tri : triangles) {
             for (const auto& vertex : tri.vertices) {
                 draw_vertices.push_back(vertex);
@@ -413,7 +521,7 @@ int main() {
         }
 
         if (!draw_vertices.empty()) {
-            if (!SDL_RenderGeometry(renderer, nullptr, draw_vertices.data(), static_cast<int>(draw_vertices.size()), nullptr, 0)) {
+            if (SDL_RenderGeometry(renderer, nullptr, draw_vertices.data(), static_cast<int>(draw_vertices.size()), nullptr, 0) < 0) {
                 std::cerr << "Failed to render geometry: " << SDL_GetError() << "\n";
                 running = false;
             }
@@ -423,34 +531,44 @@ int main() {
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
             SDL_SetRenderDrawColor(renderer, 240, 240, 255, 80);
 
-            for (std::uint32_t z = 0; z < extent.z; ++z) {
-                for (std::uint32_t y = 0; y < extent.y; ++y) {
-                    for (std::uint32_t x = 0; x < extent.x; ++x) {
-                        if (voxels(x, y, z) == voxel_id{}) {
-                            continue;
-                        }
+            for (const auto& [key, chunk] : chunk_meshes) {
+                (void)key;
+                const float base_x = static_cast<float>(chunk.origin[0]);
+                const float base_y = static_cast<float>(chunk.origin[1]);
+                const float base_z = static_cast<float>(chunk.origin[2]);
+                const float width = static_cast<float>(chunk_dimensions.x * chunk.cell_size);
+                const float depth = static_cast<float>(chunk_dimensions.y * chunk.cell_size);
+                const float height = static_cast<float>(chunk_dimensions.z);
 
-                        const float3 base{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
-                        std::array<SDL_FPoint, voxel_corners.size()> projected_points{};
-                        std::array<bool, voxel_corners.size()> visibility{};
-                        for (std::size_t corner = 0; corner < voxel_corners.size(); ++corner) {
-                            const float3 corner_position = add(base, voxel_corners[corner]);
-                            const projection_result projected = project_perspective(corner_position, cam, vectors, output_width, output_height);
-                            visibility[corner] = projected.visible;
-                            projected_points[corner] = projected.point;
-                        }
+                const std::array<float3, 8> corners{
+                    float3{base_x, base_y, base_z},
+                    float3{base_x + width, base_y, base_z},
+                    float3{base_x, base_y + depth, base_z},
+                    float3{base_x + width, base_y + depth, base_z},
+                    float3{base_x, base_y, base_z + height},
+                    float3{base_x + width, base_y, base_z + height},
+                    float3{base_x, base_y + depth, base_z + height},
+                    float3{base_x + width, base_y + depth, base_z + height},
+                };
 
-                        for (const auto& edge : voxel_edges) {
-                            if (!visibility[edge.first] || !visibility[edge.second]) {
-                                continue;
-                            }
-                            SDL_RenderLine(renderer,
-                                projected_points[edge.first].x,
-                                projected_points[edge.first].y,
-                                projected_points[edge.second].x,
-                                projected_points[edge.second].y);
-                        }
+                std::array<SDL_FPoint, corners.size()> projected_points{};
+                std::array<bool, corners.size()> visibility{};
+
+                for (std::size_t i = 0; i < corners.size(); ++i) {
+                    const projection_result projected = project_perspective(corners[i], cam, vectors, output_width, output_height);
+                    visibility[i] = projected.visible;
+                    projected_points[i] = projected.point;
+                }
+
+                for (const auto& edge : box_edges) {
+                    if (!visibility[edge.first] || !visibility[edge.second]) {
+                        continue;
                     }
+                    SDL_RenderLine(renderer,
+                        projected_points[edge.first].x,
+                        projected_points[edge.first].y,
+                        projected_points[edge.second].x,
+                        projected_points[edge.second].y);
                 }
             }
 
