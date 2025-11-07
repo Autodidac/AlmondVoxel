@@ -79,7 +79,9 @@ float dot(float3 a, float3 b) {
 SDL_FColor shade_color(voxel_id id, const std::array<float, 3>& normal_values) {
     const float3 normal = normalize(to_float3(normal_values));
     const float3 light = normalize(float3{0.6f, 0.9f, 0.5f});
-    const float intensity = std::clamp(dot(normal, light) * 0.5f + 0.5f, 0.2f, 1.0f);
+    const float diffuse = std::max(dot(normal, light), 0.0f);
+    const float ambient = 0.35f;
+    const float intensity = std::clamp(ambient + diffuse * 0.65f, 0.0f, 1.0f);
 
     SDL_FColor base{};
     if (id == voxel_id{}) {
@@ -368,7 +370,7 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
 int main(int argc, char** argv) {
     using namespace almond::voxel;
 
-    mesher_choice mesher_mode = mesher_choice::marching;
+    mesher_choice mesher_mode = mesher_choice::greedy;
     for (int i = 1; i < argc; ++i) {
         std::string_view arg{argv[i]};
         if (arg == "--marching-cubes" || arg == "--mesher=marching") {
