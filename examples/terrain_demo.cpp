@@ -290,7 +290,7 @@ int main() {
 
     auto voxels = chunk.voxels();
 
-    SDL_SetRelativeMouseMode(SDL_TRUE);
+    SDL_SetWindowRelativeMouseMode(window, true);
 
     while (running) {
         SDL_Event event;
@@ -304,7 +304,7 @@ int main() {
                     debug_view = !debug_view;
                 } else if (event.key.key == SDLK_F1) {
                     mouse_captured = !mouse_captured;
-                    SDL_SetRelativeMouseMode(mouse_captured ? SDL_TRUE : SDL_FALSE);
+                    SDL_SetWindowRelativeMouseMode(window, mouse_captured ? true : false);
                 }
             } else if (event.type == SDL_EVENT_MOUSE_MOTION && mouse_captured) {
                 const float sensitivity = 0.0025f;
@@ -330,7 +330,7 @@ int main() {
 
         const camera_vectors vectors = compute_camera_vectors(cam);
 
-        const Uint8* keyboard = SDL_GetKeyboardState(nullptr);
+        const bool* keyboard = SDL_GetKeyboardState(nullptr);
         float move_speed = keyboard[SDL_SCANCODE_LSHIFT] ? 25.0f : 10.0f;
         float3 move_delta{};
         float3 planar_forward{vectors.forward.x, vectors.forward.y, 0.0f};
@@ -444,7 +444,7 @@ int main() {
                             if (!visibility[edge.first] || !visibility[edge.second]) {
                                 continue;
                             }
-                            SDL_RenderLineF(renderer,
+                            SDL_RenderLine(renderer,
                                 projected_points[edge.first].x,
                                 projected_points[edge.first].y,
                                 projected_points[edge.second].x,
