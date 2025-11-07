@@ -14,3 +14,16 @@ target_compile_options(terrain_demo PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
 )
+
+add_executable(voxel_showcase voxel_showcase.cpp)
+
+target_sources(voxel_showcase PRIVATE ${ALMOND_VOXEL_TEST_CASE_SOURCES})
+
+target_link_libraries(voxel_showcase PRIVATE almond_voxel SDL3::SDL3)
+
+target_include_directories(voxel_showcase PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+
+target_compile_options(voxel_showcase PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
+    $<$<CXX_COMPILER_ID:MSVC>:/W4>
+)
