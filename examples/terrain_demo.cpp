@@ -388,7 +388,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << "Failed to initialise SDL: " << SDL_GetError() << "\n";
         return 1;
     }
@@ -445,7 +445,7 @@ int main(int argc, char** argv) {
                 } else if (event.key.key == SDLK_F1) {
                     mouse_captured = !mouse_captured;
                     SDL_SetWindowRelativeMouseMode(window, mouse_captured ? true : false);
-                } else if (event.key.key == SDLK_m) {
+                } else if (event.key.key == SDLK_M) {
                     mesher_mode = mesher_mode == mesher_choice::greedy ? mesher_choice::marching : mesher_choice::greedy;
                     chunk_meshes.clear();
                     std::cout << "Switched mesher to "
@@ -586,7 +586,7 @@ int main(int argc, char** argv) {
         }
 
         if (!draw_vertices.empty()) {
-            if (SDL_RenderGeometry(renderer, nullptr, draw_vertices.data(), static_cast<int>(draw_vertices.size()), nullptr, 0) < 0) {
+            if (!SDL_RenderGeometry(renderer, nullptr, draw_vertices.data(), static_cast<int>(draw_vertices.size()), nullptr, 0)) {
                 std::cerr << "Failed to render geometry: " << SDL_GetError() << "\n";
                 running = false;
             }
