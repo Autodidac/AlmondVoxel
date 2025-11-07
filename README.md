@@ -1,6 +1,6 @@
 # AlmondVoxel
 
-AlmondVoxel is a header-only C++20 voxel framework that packages spatial data structures, procedural generation pipelines, and rendering-friendly mesh extraction utilities into a single, easily embeddable library. The repository also ships curated examples and regression tests that demonstrate how to stream infinite worlds, serialize regions, and validate greedy meshing outputs.
+AlmondVoxel is a header-only C++20 voxel framework that packages spatial data structures, procedural generation pipelines, and rendering-friendly mesh extraction utilities into a single, easily embeddable library. The repository also ships curated examples and regression tests that demonstrate how to stream infinite worlds, serialize regions, and validate greedy meshing outputs. The meshing module now includes both voxel-perfect greedy extraction and a marching cubes surface generator, and the greedy mesher understands neighbour chunk occupancy to eliminate seams at chunk borders.
 
 ## Architecture overview
 
@@ -90,6 +90,8 @@ regions.ensure_region(origin, [&](auto& chunk) {
 mesh_buffer mesh = meshing::greedy_mesh(regions.require_chunk(origin));
 ```
 
+For smooth implicit surfaces, call `meshing::marching_cubes_from_chunk` to extract a marching cubes mesh or provide a custom density sampler to `meshing::marching_cubes`.
+
 If you cannot add the directory as a subproject, copy the `include/almond_voxel` tree into your build and add it to the include path while defining the `ALMOND_VOXEL_HEADER_ONLY` macro.
 
 ## Repository layout
@@ -99,7 +101,7 @@ If you cannot add the directory as a subproject, copy the `include/almond_voxel`
 | `include/almond_voxel/` | Header-only library organised by domain (core, generation, meshing, serialization). |
 | `examples/sandbox/` | Interactive ImGui viewer that visualises chunk streaming and material layering. |
 | `examples/streaming_cli/` | Console demo that benchmarks procedural generation pipelines. |
-| `tests/` | doctest-powered regression suite for chunk math, greedy meshing, and serialization codecs. |
+| `tests/` | doctest-powered regression suite for chunk math, greedy and marching-cubes meshing, and serialization codecs. |
 | `cmake/` | Toolchain helpers, presets, and exported CMake package configuration. |
 | `docs/` | Architecture notes, platform guides, roadmap, and API reference. |
 
