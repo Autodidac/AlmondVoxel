@@ -188,8 +188,6 @@ struct chunk_instance_hash {
 
 struct chunk_mesh_entry {
     meshing::mesh_result mesh{};
-    std::vector<float3> world_positions{};
-    std::vector<SDL_FColor> colors{};
     std::array<std::int64_t, 3> origin{};
     int cell_size{1};
     mesher_choice mode{mesher_choice::greedy};
@@ -300,20 +298,8 @@ chunk_mesh_entry build_chunk_mesh(
         };
         entry.mesh = meshing::greedy_mesh_with_neighbors(chunk, is_opaque, neighbor_sampler);
     }
-    entry.world_positions.resize(entry.mesh.vertices.size());
-    entry.colors.resize(entry.mesh.vertices.size());
     entry.origin = origin;
     entry.cell_size = cell_size;
-
-    for (std::size_t i = 0; i < entry.mesh.vertices.size(); ++i) {
-        const auto& vertex = entry.mesh.vertices[i];
-        entry.world_positions[i] = float3{
-            static_cast<float>(origin[0]) + static_cast<float>(vertex.position[0]) * static_cast<float>(cell_size),
-            static_cast<float>(origin[1]) + static_cast<float>(vertex.position[1]) * static_cast<float>(cell_size),
-            static_cast<float>(origin[2]) + vertex.position[2]
-        };
-        entry.colors[i] = shade_color(vertex.id, vertex.normal);
-    }
 
     return entry;
 }
@@ -378,7 +364,7 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
 int main(int argc, char** argv) {
     using namespace almond::voxel;
 
-    mesher_choice mesher_mode = mesher_choice::greedy;
+    mesher_choice mesher_mode = mesher_choice::marching;
     for (int i = 1; i < argc; ++i) {
         std::string_view arg{argv[i]};
         if (arg == "--marching-cubes" || arg == "--mesher=marching") {
@@ -528,6 +514,14 @@ int main(int argc, char** argv) {
         draw_vertices.clear();
         draw_vertices.reserve(total_triangles * 3);
 
+        const auto world_position = [](const chunk_mesh_entry& chunk, const meshing::vertex& vertex) {
+            return float3{
+                static_cast<float>(chunk.origin[0]) + static_cast<float>(vertex.position[0]) * static_cast<float>(chunk.cell_size),
+                static_cast<float>(chunk.origin[1]) + static_cast<float>(vertex.position[1]) * static_cast<float>(chunk.cell_size),
+                static_cast<float>(chunk.origin[2]) + vertex.position[2]
+            };
+        };
+
         for (const auto& [key, chunk] : chunk_meshes) {
             (void)key;
             const auto& mesh = chunk.mesh;
@@ -536,10 +530,14 @@ int main(int argc, char** argv) {
                 const std::uint32_t i1 = mesh.indices[i + 1];
                 const std::uint32_t i2 = mesh.indices[i + 2];
 
-                const float3 normal = to_float3(mesh.vertices[i0].normal);
-                if (length_squared(normal) > 0.0f) {
-                    const float3 view_vector = subtract(cam.position, chunk.world_positions[i0]);
-                    if (dot(normal, view_vector) <= 0.0f) {
+                const float3 p0 = world_position(chunk, mesh.vertices[i0]);
+                const float3 p1 = world_position(chunk, mesh.vertices[i1]);
+                const float3 p2 = world_position(chunk, mesh.vertices[i2]);
+                float3 face_normal = cross(subtract(p1, p0), subtract(p2, p0));
+                if (length_squared(face_normal) > 0.0f) {
+                    face_normal = normalize(face_normal);
+                    const float3 view_vector = subtract(cam.position, p0);
+                    if (dot(face_normal, view_vector) <= 0.0f) {
                         continue;
                     }
                 }
@@ -548,10 +546,11 @@ int main(int argc, char** argv) {
                 bool visible = true;
                 float depth_sum = 0.0f;
                 const std::array<std::uint32_t, 3> indices{i0, i1, i2};
+                const std::array<float3, 3> positions{p0, p1, p2};
 
                 for (std::size_t corner = 0; corner < indices.size(); ++corner) {
                     const std::uint32_t idx = indices[corner];
-                    const float3& position = chunk.world_positions[idx];
+                    const float3& position = positions[corner];
                     const projection_result projected = project_perspective(position, cam, vectors, output_width, output_height);
                     if (!projected.visible) {
                         visible = false;
@@ -560,7 +559,7 @@ int main(int argc, char** argv) {
 
                     SDL_Vertex v{};
                     v.position = projected.point;
-                    v.color = chunk.colors[idx];
+                    v.color = shade_color(mesh.vertices[idx].id, mesh.vertices[idx].normal);
                     v.tex_coord = SDL_FPoint{0.0f, 0.0f};
                     tri.vertices[corner] = v;
                     depth_sum += projected.depth;

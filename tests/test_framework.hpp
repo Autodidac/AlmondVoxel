@@ -76,10 +76,14 @@ inline void run_tests() {
         }                                                                                                                \
     } while (false)
 
+#define CHECK_FALSE(expr) CHECK(!(expr))
+
 #define REQUIRE(expr)                                                                                                     \
     do {                                                                                                                 \
         if (!(expr)) {                                                                                                   \
             throw ::almond::voxel::test::test_failure{std::string{"REQUIRE failed: "} + #expr};                           \
         }                                                                                                                \
     } while (false)
+
+#define REQUIRE_FALSE(expr) REQUIRE(!(expr))
 

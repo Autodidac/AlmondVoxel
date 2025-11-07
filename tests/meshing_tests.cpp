@@ -87,3 +87,27 @@ TEST_CASE(marching_cubes_from_chunk_binary) {
     CHECK_FALSE(mesh.vertices.empty());
     CHECK_FALSE(mesh.indices.empty());
 }
+
+TEST_CASE(marching_cubes_respects_chunk_neighbors) {
+    const auto extent = cubic_extent(2);
+    chunk_storage primary{extent};
+    chunk_storage neighbor{extent};
+    primary.fill(voxel_id{1});
+    neighbor.fill(voxel_id{1});
+
+    meshing::chunk_neighbors neighbors{};
+    neighbors.pos_x = &neighbor;
+
+    const auto mesh = meshing::marching_cubes_from_chunk(primary,
+        [](voxel_id id) { return id != voxel_id{}; }, neighbors);
+
+    bool has_positive_x_surface = false;
+    for (const auto& vertex : mesh.vertices) {
+        if (vertex.normal[0] > 0.5f) {
+            has_positive_x_surface = true;
+            break;
+        }
+    }
+
+    CHECK_FALSE(has_positive_x_surface);
+}
