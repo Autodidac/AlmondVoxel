@@ -145,7 +145,7 @@ int main() {
     const auto mesh = meshing::greedy_mesh(chunk);
     print_statistics(mesh);
 
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << "Failed to initialise SDL: " << SDL_GetError() << "\n";
         return 1;
     }
@@ -157,7 +157,7 @@ int main() {
         return 1;
     }
 
-    SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
     if (renderer == nullptr) {
         std::cerr << "Failed to create SDL renderer: " << SDL_GetError() << "\n";
         SDL_DestroyWindow(window);
@@ -165,13 +165,13 @@ int main() {
         return 1;
     }
 
-    if (!SDL_RendererHasFeature(renderer, SDL_RENDERER_FEATURE_RENDER_GEOMETRY)) {
-        std::cerr << "SDL renderer does not support geometry rendering" << std::endl;
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
-    }
+    //if (!SDL_RendererHasFeature(renderer, SDL_RENDERER_FEATURE_RENDER_GEOMETRY)) {
+    //    std::cerr << "SDL renderer does not support geometry rendering" << std::endl;
+    //    SDL_DestroyRenderer(renderer);
+    //    SDL_DestroyWindow(window);
+    //    SDL_Quit();
+    //    return 1;
+    //}
 
     const auto extent = chunk.extent();
     const float3 center{static_cast<float>(extent.x) * 0.5f, static_cast<float>(extent.y) * 0.5f, static_cast<float>(extent.z) * 0.5f};
@@ -228,7 +228,7 @@ int main() {
         }
 
         if (!draw_vertices.empty()) {
-            if (SDL_RenderGeometry(renderer, nullptr, draw_vertices.data(), static_cast<int>(draw_vertices.size()), nullptr, 0) != 0) {
+            if (!SDL_RenderGeometry(renderer, nullptr, draw_vertices.data(), static_cast<int>(draw_vertices.size()), nullptr, 0)) {
                 std::cerr << "Failed to render geometry: " << SDL_GetError() << "\n";
                 running = false;
             }
