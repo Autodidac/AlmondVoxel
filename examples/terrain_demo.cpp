@@ -13,9 +13,14 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <condition_variable>
+#include <deque>
 #include <exception>
 #include <iostream>
+#include <mutex>
+#include <stop_token>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -243,22 +248,79 @@ bool cell_is_solid(const std::array<std::int64_t, 3>& origin, int cell_size, con
     return sample_z < terrain;
 }
 
+struct terrain_height_cache {
+    std::vector<double> cell{};
+    std::vector<double> vertex{};
+    std::size_t cell_stride{};
+    std::size_t vertex_stride{};
+};
+
+terrain_height_cache build_height_cache(const chunk_extent& extent, const std::array<std::int64_t, 3>& origin,
+    int cell_size) {
+    terrain_height_cache cache{};
+    const std::size_t cell_width = static_cast<std::size_t>(extent.x);
+    const std::size_t cell_height = static_cast<std::size_t>(extent.y);
+    const std::size_t vertex_width = static_cast<std::size_t>(extent.x) + 1;
+    const std::size_t vertex_height = static_cast<std::size_t>(extent.y) + 1;
+
+    cache.cell.resize(cell_width * cell_height);
+    cache.vertex.resize(vertex_width * vertex_height);
+    cache.cell_stride = cell_width;
+    cache.vertex_stride = vertex_width;
+
+    std::vector<double> cell_x(cell_width);
+    for (std::size_t x = 0; x < cell_width; ++x) {
+        cell_x[x] = sample_coordinate(origin[0], static_cast<std::ptrdiff_t>(x), cell_size);
+    }
+
+    std::vector<double> cell_y(cell_height);
+    for (std::size_t y = 0; y < cell_height; ++y) {
+        cell_y[y] = sample_coordinate(origin[1], static_cast<std::ptrdiff_t>(y), cell_size);
+    }
+
+    std::vector<double> vertex_x(vertex_width);
+    for (std::size_t x = 0; x < vertex_width; ++x) {
+        vertex_x[x] = static_cast<double>(origin[0]) + static_cast<double>(x) * static_cast<double>(cell_size);
+    }
+
+    std::vector<double> vertex_y(vertex_height);
+    for (std::size_t y = 0; y < vertex_height; ++y) {
+        vertex_y[y] = static_cast<double>(origin[1]) + static_cast<double>(y) * static_cast<double>(cell_size);
+    }
+
+    for (std::size_t y = 0; y < cell_height; ++y) {
+        for (std::size_t x = 0; x < cell_width; ++x) {
+            cache.cell[y * cache.cell_stride + x] = terrain_height(cell_x[x], cell_y[y]);
+        }
+    }
+
+    for (std::size_t y = 0; y < vertex_height; ++y) {
+        for (std::size_t x = 0; x < vertex_width; ++x) {
+            cache.vertex[y * cache.vertex_stride + x] = terrain_height(vertex_x[x], vertex_y[y]);
+        }
+    }
+
+    return cache;
+}
+
 chunk_mesh_entry build_chunk_mesh(
     const chunk_extent& extent,
     const std::array<std::int64_t, 3>& origin,
     int cell_size,
     mesher_choice mode) {
+    const auto height_cache = build_height_cache(extent, origin, cell_size);
+    const std::size_t cell_stride = height_cache.cell_stride;
+    const std::size_t vertex_stride = height_cache.vertex_stride;
+
     chunk_storage chunk{extent};
     auto voxels = chunk.voxels();
     for (std::uint32_t z = 0; z < extent.z; ++z) {
+        const double sample_z = static_cast<double>(origin[2]) + (static_cast<double>(z) + 0.5);
         for (std::uint32_t y = 0; y < extent.y; ++y) {
+            const std::size_t row = static_cast<std::size_t>(y) * cell_stride;
             for (std::uint32_t x = 0; x < extent.x; ++x) {
-                std::array<std::ptrdiff_t, 3> coord{
-                    static_cast<std::ptrdiff_t>(x),
-                    static_cast<std::ptrdiff_t>(y),
-                    static_cast<std::ptrdiff_t>(z)
-                };
-                voxels(x, y, z) = cell_is_solid(origin, cell_size, coord) ? voxel_id{1} : voxel_id{};
+                const double terrain = height_cache.cell[row + static_cast<std::size_t>(x)];
+                voxels(x, y, z) = sample_z < terrain ? voxel_id{1} : voxel_id{};
             }
         }
     }
@@ -268,12 +330,9 @@ chunk_mesh_entry build_chunk_mesh(
 
     if (mode == mesher_choice::marching) {
         auto density_sampler = [&](std::size_t vx, std::size_t vy, std::size_t vz) {
-            const double sample_x = static_cast<double>(origin[0])
-                + static_cast<double>(vx) * static_cast<double>(cell_size);
-            const double sample_y = static_cast<double>(origin[1])
-                + static_cast<double>(vy) * static_cast<double>(cell_size);
             const double sample_z = static_cast<double>(origin[2]) + static_cast<double>(vz);
-            const double terrain = terrain_height(sample_x, sample_y);
+            const std::size_t index = vy * vertex_stride + vx;
+            const double terrain = height_cache.vertex[index];
             return static_cast<float>(sample_z - terrain);
         };
 
@@ -287,6 +346,15 @@ chunk_mesh_entry build_chunk_mesh(
     } else {
         auto is_opaque = [](voxel_id id) { return id != voxel_id{}; };
         auto neighbor_sampler = [&](const std::array<std::ptrdiff_t, 3>& coord) {
+            if (coord[0] >= 0 && coord[0] < static_cast<std::ptrdiff_t>(extent.x)
+                && coord[1] >= 0 && coord[1] < static_cast<std::ptrdiff_t>(extent.y)) {
+                const auto x_index = static_cast<std::size_t>(coord[0]);
+                const auto y_index = static_cast<std::size_t>(coord[1]);
+                const std::size_t row = y_index * cell_stride;
+                const double terrain = height_cache.cell[row + x_index];
+                const double sample_z = static_cast<double>(origin[2]) + (static_cast<double>(coord[2]) + 0.5);
+                return sample_z < terrain;
+            }
             return cell_is_solid(origin, cell_size, coord);
         };
         entry.mesh = meshing::greedy_mesh_with_neighbors(chunk, is_opaque, neighbor_sampler);
@@ -297,11 +365,176 @@ chunk_mesh_entry build_chunk_mesh(
     return entry;
 }
 
+struct chunk_mesh_result {
+    chunk_instance_key key{};
+    chunk_mesh_entry entry{};
+    std::uint64_t generation{};
+};
+
+class chunk_build_dispatcher {
+public:
+    chunk_build_dispatcher();
+    ~chunk_build_dispatcher();
+
+    void enqueue(const chunk_instance_key& key, const chunk_extent& extent,
+        const std::array<std::int64_t, 3>& origin, int cell_size, mesher_choice mode);
+    bool is_pending(const chunk_instance_key& key) const;
+    void drain_ready(std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash>& cache);
+    void clear();
+
+private:
+    struct build_job {
+        chunk_extent extent{};
+        std::array<std::int64_t, 3> origin{};
+        int cell_size{1};
+        mesher_choice mode{mesher_choice::greedy};
+        std::uint64_t generation{0};
+    };
+
+    void worker_loop(std::stop_token stop_token);
+
+    mutable std::mutex mutex_{};
+    std::condition_variable cv_{};
+    std::deque<chunk_instance_key> queue_{};
+    std::unordered_map<chunk_instance_key, build_job, chunk_instance_hash> queued_jobs_{};
+    std::unordered_map<chunk_instance_key, build_job, chunk_instance_hash> pending_jobs_{};
+    std::unordered_map<chunk_instance_key, std::uint64_t, chunk_instance_hash> running_jobs_{};
+    std::deque<chunk_mesh_result> ready_{};
+    std::uint64_t generation_{0};
+    std::jthread worker_{};
+};
+
+chunk_build_dispatcher::chunk_build_dispatcher()
+    : worker_{[this](std::stop_token stop_token) { worker_loop(stop_token); }} {
+}
+
+chunk_build_dispatcher::~chunk_build_dispatcher() {
+    clear();
+    worker_.request_stop();
+    cv_.notify_all();
+}
+
+void chunk_build_dispatcher::enqueue(const chunk_instance_key& key, const chunk_extent& extent,
+    const std::array<std::int64_t, 3>& origin, int cell_size, mesher_choice mode) {
+    std::scoped_lock lock{mutex_};
+    build_job job{extent, origin, cell_size, mode, generation_};
+
+    if (auto it = running_jobs_.find(key); it != running_jobs_.end()) {
+        pending_jobs_[key] = job;
+        return;
+    }
+
+    if (auto it = queued_jobs_.find(key); it != queued_jobs_.end()) {
+        it->second = job;
+        return;
+    }
+
+    queue_.push_back(key);
+    queued_jobs_.emplace(key, std::move(job));
+    cv_.notify_one();
+}
+
+bool chunk_build_dispatcher::is_pending(const chunk_instance_key& key) const {
+    std::scoped_lock lock{mutex_};
+
+    if (auto it = queued_jobs_.find(key); it != queued_jobs_.end()) {
+        if (it->second.generation == generation_) {
+            return true;
+        }
+    }
+
+    if (auto it = pending_jobs_.find(key); it != pending_jobs_.end()) {
+        if (it->second.generation == generation_) {
+            return true;
+        }
+    }
+
+    if (auto it = running_jobs_.find(key); it != running_jobs_.end()) {
+        if (it->second == generation_) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void chunk_build_dispatcher::drain_ready(
+    std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash>& cache) {
+    std::deque<chunk_mesh_result> ready_local;
+    {
+        std::scoped_lock lock{mutex_};
+        while (!ready_.empty()) {
+            ready_local.push_back(std::move(ready_.front()));
+            ready_.pop_front();
+        }
+    }
+
+    while (!ready_local.empty()) {
+        auto result = std::move(ready_local.front());
+        ready_local.pop_front();
+        if (result.generation != generation_) {
+            continue;
+        }
+        cache[result.key] = std::move(result.entry);
+    }
+}
+
+void chunk_build_dispatcher::clear() {
+    std::scoped_lock lock{mutex_};
+    ++generation_;
+    queue_.clear();
+    queued_jobs_.clear();
+    pending_jobs_.clear();
+    ready_.clear();
+}
+
+void chunk_build_dispatcher::worker_loop(std::stop_token stop_token) {
+    while (true) {
+        chunk_instance_key key{};
+        build_job job{};
+
+        {
+            std::unique_lock lock{mutex_};
+            cv_.wait(lock, [&] { return stop_token.stop_requested() || !queue_.empty(); });
+            if (stop_token.stop_requested() && queue_.empty()) {
+                return;
+            }
+            if (queue_.empty()) {
+                continue;
+            }
+
+            key = queue_.front();
+            queue_.pop_front();
+            job = queued_jobs_.at(key);
+            queued_jobs_.erase(key);
+            running_jobs_[key] = job.generation;
+        }
+
+        auto entry = build_chunk_mesh(job.extent, job.origin, job.cell_size, job.mode);
+        chunk_mesh_result result{key, std::move(entry), job.generation};
+
+        {
+            std::scoped_lock lock{mutex_};
+            ready_.push_back(std::move(result));
+            running_jobs_.erase(key);
+
+            if (auto it = pending_jobs_.find(key); it != pending_jobs_.end()) {
+                queue_.push_back(key);
+                queued_jobs_[key] = it->second;
+                pending_jobs_.erase(it);
+                cv_.notify_one();
+            }
+        }
+    }
+}
+
 void update_required_chunks(const camera& cam, const chunk_extent& extent, const std::array<lod_definition, 3>& lods,
-    mesher_choice mode, std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash>& cache) {
+    mesher_choice mode, std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash>& cache,
+    chunk_build_dispatcher& builder) {
+    builder.drain_ready(cache);
     std::unordered_set<chunk_instance_key, chunk_instance_hash> needed;
-    const std::size_t build_budget = mode == mesher_choice::marching ? 2 : 4;
-    std::size_t builds_this_frame = 0;
+    const std::size_t build_budget = mode == mesher_choice::marching ? 8 : 12;
+    std::size_t enqueued_this_frame = 0;
 
     for (const auto& lod : lods) {
         const float chunk_size = static_cast<float>(extent.x * lod.cell_size);
@@ -336,17 +569,17 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
                 if (needed.insert(key).second) {
                     auto it = cache.find(key);
                     if (it == cache.end()) {
-                        if (builds_this_frame >= build_budget) {
+                        if (enqueued_this_frame >= build_budget || builder.is_pending(key)) {
                             continue;
                         }
-                        cache.emplace(key, build_chunk_mesh(extent, origin, lod.cell_size, mode));
-                        ++builds_this_frame;
+                        builder.enqueue(key, extent, origin, lod.cell_size, mode);
+                        ++enqueued_this_frame;
                     } else if (it->second.mode != mode) {
-                        if (builds_this_frame >= build_budget) {
+                        if (builder.is_pending(key) || enqueued_this_frame >= build_budget) {
                             continue;
                         }
-                        it->second = build_chunk_mesh(extent, origin, lod.cell_size, mode);
-                        ++builds_this_frame;
+                        builder.enqueue(key, extent, origin, lod.cell_size, mode);
+                        ++enqueued_this_frame;
                     }
                 }
             }
@@ -426,6 +659,7 @@ int main(int argc, char** argv) {
     std::uint64_t previous_ticks = SDL_GetTicks();
 
     std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash> chunk_meshes;
+    chunk_build_dispatcher chunk_builder;
 
     std::vector<projected_triangle> triangles;
     std::vector<SDL_Vertex> draw_vertices;
@@ -448,6 +682,7 @@ int main(int argc, char** argv) {
                 } else if (event.key.key == SDLK_M) {
                     mesher_mode = mesher_mode == mesher_choice::greedy ? mesher_choice::marching : mesher_choice::greedy;
                     chunk_meshes.clear();
+                    chunk_builder.clear();
                     std::cout << "Switched mesher to "
                               << (mesher_mode == mesher_choice::greedy ? "greedy" : "marching cubes") << "\n";
                 }
@@ -512,7 +747,7 @@ int main(int argc, char** argv) {
             cam.position = add(cam.position, scale(move_delta, move_speed * delta_seconds));
         }
 
-        update_required_chunks(cam, chunk_dimensions, lods, mesher_mode, chunk_meshes);
+        update_required_chunks(cam, chunk_dimensions, lods, mesher_mode, chunk_meshes, chunk_builder);
 
         SDL_SetRenderDrawColor(renderer, 25, 25, 35, 255);
         SDL_RenderClear(renderer);
