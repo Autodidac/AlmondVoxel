@@ -214,8 +214,8 @@ int main() {
                 position.y -= center.y;
                 position.z -= center.z;
 
-                position = rotate_y(position, angle);
-                position = rotate_x(position, -0.6f);
+               // position = rotate_y(position, angle);
+               // position = rotate_x(position, -0.6f);
 
                 const SDL_FPoint projected = project_isometric(position, output_width, output_height);
 
