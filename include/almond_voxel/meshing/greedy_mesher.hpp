@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace almond::voxel::meshing {
@@ -22,8 +23,9 @@ struct mesh_result {
     std::vector<std::uint32_t> indices;
 };
 
-template <typename IsOpaque>
-[[nodiscard]] mesh_result greedy_mesh(const chunk_storage& chunk, IsOpaque&& is_opaque) {
+template <typename IsOpaque, typename NeighborOpaque>
+[[nodiscard]] mesh_result greedy_mesh_with_neighbors(const chunk_storage& chunk, IsOpaque&& is_opaque,
+    NeighborOpaque&& neighbor_opaque) {
     mesh_result result;
     const auto extent = chunk.extent();
     const auto dims = extent.to_array();
@@ -77,6 +79,14 @@ template <typename IsOpaque>
                     bool neighbor_solid = false;
                     if (neighbor_inside) {
                         neighbor_solid = is_opaque(voxels(neighbor[0], neighbor[1], neighbor[2]));
+                    } else {
+                        std::array<std::ptrdiff_t, 3> neighbor_local{
+                            static_cast<std::ptrdiff_t>(pos[0]),
+                            static_cast<std::ptrdiff_t>(pos[1]),
+                            static_cast<std::ptrdiff_t>(pos[2])
+                        };
+                        neighbor_local[axis] += sign;
+                        neighbor_solid = neighbor_opaque(neighbor_local);
                     }
 
                     if (!neighbor_inside || !neighbor_solid) {
@@ -167,6 +177,12 @@ template <typename IsOpaque>
     }
 
     return result;
+}
+
+template <typename IsOpaque>
+[[nodiscard]] mesh_result greedy_mesh(const chunk_storage& chunk, IsOpaque&& is_opaque) {
+    auto neighbor = [](const std::array<std::ptrdiff_t, 3>&) { return false; };
+    return greedy_mesh_with_neighbors(chunk, std::forward<IsOpaque>(is_opaque), neighbor);
 }
 
 inline mesh_result greedy_mesh(const chunk_storage& chunk) {
