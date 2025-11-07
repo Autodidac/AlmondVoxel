@@ -15,6 +15,8 @@
 namespace almond::voxel::meshing {
 
 struct marching_cubes_config {
+    // Scalar threshold for the implicit surface. Sample values strictly below the iso value are
+    // classified as solid, while values greater than or equal to the iso value are treated as empty.
     float iso_value{0.5f};
 };
 
@@ -125,7 +127,7 @@ template <typename DensitySampler, typename MaterialSampler>
 
                 int cube_index = 0;
                 for (int corner = 0; corner < 8; ++corner) {
-                    if (corner_values[corner] > config.iso_value) {
+                    if (corner_values[corner] < config.iso_value) {
                         cube_index |= (1 << corner);
                     }
                 }
@@ -206,9 +208,9 @@ template <typename IsSolid>
         const auto sample = sample_voxel(static_cast<std::ptrdiff_t>(vx), static_cast<std::ptrdiff_t>(vy),
             static_cast<std::ptrdiff_t>(vz));
         if (!sample) {
-            return 0.0f;
+            return 1.0f;
         }
-        return is_solid(*sample) ? 1.0f : 0.0f;
+        return is_solid(*sample) ? 0.0f : 1.0f;
     };
 
     auto material_sampler = [&](std::size_t x, std::size_t y, std::size_t z) {

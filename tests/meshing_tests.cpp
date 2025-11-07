@@ -52,12 +52,12 @@ TEST_CASE(marching_cubes_single_triangle) {
     const chunk_extent extent{1, 1, 1};
     const float field[2][2][2] = {
         {
-            {1.0f, 0.0f},
-            {0.0f, 0.0f}
+            {0.0f, 1.0f},
+            {1.0f, 1.0f}
         },
         {
-            {0.0f, 0.0f},
-            {0.0f, 0.0f}
+            {1.0f, 1.0f},
+            {1.0f, 1.0f}
         }
     };
 

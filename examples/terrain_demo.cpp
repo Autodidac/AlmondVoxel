@@ -281,7 +281,8 @@ chunk_mesh_entry build_chunk_mesh(
             if (count == 0) {
                 return 0.0f;
             }
-            return total / static_cast<float>(count);
+            const float occupancy = total / static_cast<float>(count);
+            return 1.0f - occupancy;
         };
 
         auto material_sampler = [voxels](std::size_t x, std::size_t y, std::size_t z) {
