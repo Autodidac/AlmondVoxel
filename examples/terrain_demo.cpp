@@ -266,28 +266,13 @@ chunk_mesh_entry build_chunk_mesh(
 
     if (mode == mesher_choice::marching) {
         auto density_sampler = [&](std::size_t vx, std::size_t vy, std::size_t vz) {
-            float total = 0.0f;
-            int count = 0;
-            for (int dx = -1; dx <= 0; ++dx) {
-                for (int dy = -1; dy <= 0; ++dy) {
-                    for (int dz = -1; dz <= 0; ++dz) {
-                        std::array<std::ptrdiff_t, 3> coord{
-                            static_cast<std::ptrdiff_t>(vx) + dx,
-                            static_cast<std::ptrdiff_t>(vy) + dy,
-                            static_cast<std::ptrdiff_t>(vz) + dz
-                        };
-                        if (cell_is_solid(origin, cell_size, coord)) {
-                            total += 1.0f;
-                        }
-                        ++count;
-                    }
-                }
-            }
-            if (count == 0) {
-                return 0.0f;
-            }
-            const float occupancy = total / static_cast<float>(count);
-            return 1.0f - occupancy;
+            const double sample_x = static_cast<double>(origin[0])
+                + static_cast<double>(vx) * static_cast<double>(cell_size);
+            const double sample_y = static_cast<double>(origin[1])
+                + static_cast<double>(vy) * static_cast<double>(cell_size);
+            const double sample_z = static_cast<double>(origin[2]) + static_cast<double>(vz);
+            const double terrain = terrain_height(sample_x, sample_y);
+            return static_cast<float>(sample_z - terrain);
         };
 
         auto material_sampler = [voxels](std::size_t x, std::size_t y, std::size_t z) {
@@ -295,7 +280,7 @@ chunk_mesh_entry build_chunk_mesh(
         };
 
         meshing::marching_cubes_config config{};
-        config.iso_value = 0.5f;
+        config.iso_value = 0.0f;
         entry.mesh = meshing::marching_cubes(extent, density_sampler, material_sampler, config);
     } else {
         auto is_opaque = [](voxel_id id) { return id != voxel_id{}; };
@@ -381,7 +366,11 @@ int main(int argc, char** argv) {
     }
 
     try {
-        test::run_tests();
+        if (test::has_registered_tests()) {
+            test::run_tests();
+        } else {
+            std::cout << "No embedded unit tests registered; skipping test suite.\n";
+        }
     } catch (const std::exception& ex) {
         std::cerr << "Test suite failed: " << ex.what() << "\n";
         return 1;
@@ -546,7 +535,7 @@ int main(int argc, char** argv) {
                 const float3 p0 = world_position(chunk, mesh.vertices[i0]);
                 const float3 p1 = world_position(chunk, mesh.vertices[i1]);
                 const float3 p2 = world_position(chunk, mesh.vertices[i2]);
-                float3 face_normal = cross(subtract(p2, p0), subtract(p1, p0));
+                float3 face_normal = cross(subtract(p1, p0), subtract(p2, p0));
                 if (length_squared(face_normal) > 0.0f) {
                     face_normal = normalize(face_normal);
                     const float3 view_vector = subtract(cam.position, p0);
