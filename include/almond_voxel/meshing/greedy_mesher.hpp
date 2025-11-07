@@ -79,7 +79,7 @@ template <typename IsOpaque, typename NeighborOpaque>
                         neighbor_solid = neighbor_opaque(neighbor_local);
                     }
 
-                    if (!neighbor_inside || !neighbor_solid) {
+                    if (!neighbor_solid) {
                         mask[idx] = mask_cell{true, current};
                     }
                 }

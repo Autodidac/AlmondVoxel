@@ -203,25 +203,12 @@ template <typename IsSolid>
     };
 
     auto density_sampler = [&](std::size_t vx, std::size_t vy, std::size_t vz) -> float {
-        float total = 0.0f;
-        int count = 0;
-        for (int dx = -1; dx <= 0; ++dx) {
-            for (int dy = -1; dy <= 0; ++dy) {
-                for (int dz = -1; dz <= 0; ++dz) {
-                    const std::ptrdiff_t sx = static_cast<std::ptrdiff_t>(vx) + dx;
-                    const std::ptrdiff_t sy = static_cast<std::ptrdiff_t>(vy) + dy;
-                    const std::ptrdiff_t sz = static_cast<std::ptrdiff_t>(vz) + dz;
-                    if (const auto sample = sample_voxel(sx, sy, sz)) {
-                        total += is_solid(*sample) ? 1.0f : 0.0f;
-                        ++count;
-                    }
-                }
-            }
-        }
-        if (count == 0) {
+        const auto sample = sample_voxel(static_cast<std::ptrdiff_t>(vx), static_cast<std::ptrdiff_t>(vy),
+            static_cast<std::ptrdiff_t>(vz));
+        if (!sample) {
             return 0.0f;
         }
-        return total / static_cast<float>(count);
+        return is_solid(*sample) ? 1.0f : 0.0f;
     };
 
     auto material_sampler = [&](std::size_t x, std::size_t y, std::size_t z) {
