@@ -6,6 +6,7 @@ All notable changes to AlmondVoxel are documented here. The format follows [Keep
 ### Changed
 - Refreshed documentation to match the current demos, tests, and cross-platform build scripts.
 - Clarified maintenance expectations and removed legacy contribution guidance.
+- Corrected chunk selection to prioritise nearby regions when scaling render distance.
 
 ## [0.1.0] - 2023-11-01
 ### Added

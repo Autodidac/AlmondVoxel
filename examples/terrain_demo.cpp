@@ -1812,8 +1812,9 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
     };
 
     for (const auto& lod : lods) {
-        const double chunk_size = static_cast<double>(extent.x) * static_cast<double>(lod.cell_size);
-        if (chunk_size <= 0.0) {
+        const double chunk_span_x = static_cast<double>(extent.x) * static_cast<double>(lod.cell_size);
+        const double chunk_span_y = static_cast<double>(extent.y) * static_cast<double>(lod.cell_size);
+        if (chunk_span_x <= 0.0 || chunk_span_y <= 0.0) {
             continue;
         }
 
@@ -1835,9 +1836,10 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
             continue;
         }
 
-        const int base_x = static_cast<int>(std::floor(static_cast<double>(cam.position.x) / chunk_size));
-        const int base_y = static_cast<int>(std::floor(static_cast<double>(cam.position.y) / chunk_size));
-        const int radius = static_cast<int>(std::ceil(scaled_max_distance / chunk_size)) + 1;
+        const int base_x = static_cast<int>(std::floor(static_cast<double>(cam.position.x) / chunk_span_x));
+        const int base_y = static_cast<int>(std::floor(static_cast<double>(cam.position.y) / chunk_span_y));
+        const double limiting_span = std::min(chunk_span_x, chunk_span_y);
+        const int radius = static_cast<int>(std::ceil(scaled_max_distance / limiting_span)) + 1;
 
         const int diameter = radius * 2 + 1;
         std::vector<chunk_candidate> chunk_candidates;
@@ -1867,8 +1869,8 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
                     static_cast<std::int64_t>(region.z) * static_cast<std::int64_t>(extent.z)
                 };
 
-                const double center_x = static_cast<double>(origin[0]) + chunk_size * 0.5;
-                const double center_y = static_cast<double>(origin[1]) + chunk_size * 0.5;
+                const double center_x = static_cast<double>(origin[0]) + chunk_span_x * 0.5;
+                const double center_y = static_cast<double>(origin[1]) + chunk_span_y * 0.5;
                 const double dx_world = center_x - static_cast<double>(cam.position.x);
                 const double dy_world = center_y - static_cast<double>(cam.position.y);
                 const double distance = std::sqrt(dx_world * dx_world + dy_world * dy_world);
@@ -1886,6 +1888,10 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
             spiral_x += direction_x;
             spiral_y += direction_y;
         }
+
+        std::sort(chunk_candidates.begin(), chunk_candidates.end(), [](const chunk_candidate& lhs, const chunk_candidate& rhs) {
+            return lhs.distance < rhs.distance;
+        });
 
         for (const auto& candidate : chunk_candidates) {
             const chunk_instance_key key{candidate.region, lod.level};
