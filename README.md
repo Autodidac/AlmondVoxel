@@ -5,6 +5,7 @@ AlmondVoxel is a header-only C++20 voxel toolkit that bundles chunked storage, r
 ## Table of contents
 - [Overview](#overview)
 - [Library modules](#library-modules)
+- [Architecture diagrams](#architecture-diagrams)
 - [Build and run](#build-and-run)
   - [Configure the build tree](#configure-the-build-tree)
   - [Compile targets](#compile-targets)
@@ -39,6 +40,72 @@ The umbrella header `almond_voxel/almond_voxel.hpp` includes the modules below. 
 | `almond_voxel/meshing/marching_cubes.hpp` | Smooth surface extraction. | `meshing::marching_cubes`, `meshing::marching_cubes_from_chunk` |
 | `almond_voxel/serialization/region_io.hpp` | Save/load regions with pluggable compressors. | `serialization::region_writer`, `serialization::region_reader` |
 | `tests/test_framework.hpp` | Lightweight assertion macros shared by demos and the consolidated test runner. | `TEST_CASE`, `CHECK`, `run_tests` |
+
+## Architecture diagrams
+The diagrams below show how the major headers interact, how runtime systems move data between components, and where the helper
+scripts fit into the workflow. Each graph reflects the current code layout in `include/`, the runtime orchestration utilities in
+`world.hpp`, and the shell entry points that ship with the repository.
+
+### Module layering
+```mermaid
+graph TD
+    Core[core.hpp\nMath & extent helpers]
+    Chunk[chunk.hpp\nChunk & voxel storage]
+    World[world.hpp\nRegion streaming]
+    Generation[generation/noise.hpp\nValue noise]
+    Terrain[terrain/classic.hpp\nTerrain sampling]
+    Editing[editing/voxel_editing.hpp\nBrush utilities]
+    Greedy[meshing/greedy_mesher.hpp\nGreedy meshing]
+    Marching[meshing/marching_cubes.hpp\nMarching cubes]
+    Serial[serialization/region_io.hpp\nRegion IO]
+
+    Core --> Chunk
+    Chunk --> World
+    Generation --> Terrain
+    Terrain --> Chunk
+    Editing --> Chunk
+    World --> Serial
+    Chunk --> Greedy
+    Chunk --> Marching
+    Chunk --> Serial
+```
+
+### Runtime data flow
+```mermaid
+flowchart LR
+    Loader[loader_type callbacks\n(region_manager::set_loader)] --> RM[region_manager]
+    Saver[saver_type callbacks\n(region_manager::set_saver)] --> RM
+    Tasks[task_queue_\n(region_manager::enqueue_task)] --> RM
+    RM -->|assure()/find()| Chunks[chunk_storage instances]
+    Chunks -->|dirty() flag| RM
+    RM -->|snapshot_loaded()| Meshing[meshing::greedy_mesh / marching_cubes]
+    Meshing --> Buffers[meshing::mesh_buffer]
+    Buffers --> Demos[terrain_demo & examples]
+    RM -->|saver() on evict| Saver
+```
+
+### Build scripts and tooling
+```mermaid
+flowchart TD
+    Configure[cmake/configure.sh\nSet generator & presets]
+    Preset[CMakePresets.json\nCompiler profiles]
+    Build[build.sh\nCompile all targets]
+    Install[install.sh\nStage headers + binaries]
+    Run[run.sh\nLocate & execute binary]
+    Tests[almond_voxel_tests\nCTest integration]
+    Bench[mesh_bench]
+    Demos[terrain_demo]
+
+    Configure -->|reads| Preset
+    Configure --> Build
+    Build --> Install
+    Build --> Tests
+    Build --> Bench
+    Build --> Demos
+    Run --> Tests
+    Run --> Bench
+    Run --> Demos
+```
 
 ## Build and run
 All helper scripts live at the repository root. They create per-compiler build folders under `Bin/` and work across Linux (GCC/Clang) and Windows (MSVC + Ninja Multi-Config).
