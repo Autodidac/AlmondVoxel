@@ -1,11 +1,15 @@
-git
-cmake
-gitkraken
-msvc
-vscode
-vscodium - linux
-vcpkg
+# Tooling inventory
 
-text editor //special topic
-python - it's just good to have
-VulkanSDK
+Core utilities used across AlmondVoxel development:
+
+- git
+- cmake
+- ninja
+- msvc
+- gcc/clang
+- vscode or vscodium
+- gitkraken (optional GUI)
+- vcpkg (optional package manager)
+- python (useful for scripting and data prep)
+- Vulkan SDK (required for advanced renderer profiling)
+- Preferred text editor for documentation touch-ups

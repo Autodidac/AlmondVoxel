@@ -1,21 +1,34 @@
 # Linux guide
 
-This guide targets Debian/Ubuntu-like distributions but generalises to most modern Linux environments.
+This guide targets Debian/Ubuntu-like distributions but generalises to most modern Linux environments. Follow the steps below to install prerequisites, configure the examples, and tune runtime performance.
+
+## Table of contents
+- [Prerequisites](#prerequisites)
+- [Install toolchain packages](#install-toolchain-packages)
+- [Configuration flags](#configuration-flags)
+- [Build and test flow](#build-and-test-flow)
+- [Performance considerations](#performance-considerations)
+- [Troubleshooting](#troubleshooting)
 
 ## Prerequisites
 - **Compiler**: GCC 12+ or Clang 15+ with C++20 support.
 - **CMake**: 3.23 or newer for preset compatibility.
-- **Ninja** (optional): improves build throughput for the examples/tests.
+- **Ninja** *(optional)*: improves build throughput for the examples/tests.
 - **Git**: used to fetch AlmondVoxel as a submodule.
 
-Because AlmondVoxel is header-only, no packaged dependencies (vcpkg, Vulkan SDK) are required to embed the library. Optional components:
-- **Vulkan SDK**: only needed when building the sandbox renderer with GPU profiling enabled.
-- **zstd/lz4 dev packages**: provide faster compression backends for `region_io` when the macros enable them.
+Optional components:
+- **Vulkan SDK**: required when profiling the sandbox renderer with GPU capture tools.
+- **zstd/lz4 development packages**: provide faster compression backends for `region_io` when the macros enable them.
 
-Install tooling via apt:
+## Install toolchain packages
 ```bash
 sudo apt update
 sudo apt install build-essential cmake ninja-build git
+```
+
+Install optional compression libraries when toggling non-default backends:
+```bash
+sudo apt install libzstd-dev liblz4-dev
 ```
 
 ## Configuration flags
@@ -49,7 +62,9 @@ Pass them through `configure.sh`:
 - For headless benchmarks, build only the CLI example: `./build.sh gcc Release example_streaming`.
 
 ## Troubleshooting
-- **Ninja not found**: remove `ninja-build` from the path or install it via `sudo apt install ninja-build`.
-- **Missing compression libraries**: install `libzstd-dev` or `liblz4-dev` when enabling non-default compression modes.
-- **Wayland/OpenGL issues**: launch the sandbox with `SDL_VIDEODRIVER=x11` if the default video driver fails.
-- **CTest cannot find tests**: ensure `./build.sh ... voxel_tests` ran before invoking `ctest` inside the build directory.
+| Symptom | Resolution |
+| --- | --- |
+| **Ninja not found** | Install via `sudo apt install ninja-build` or remove `ninja-build` from the path to fall back to Makefiles. |
+| **Missing compression libraries** | Install `libzstd-dev` or `liblz4-dev` when enabling non-default compression modes. |
+| **Wayland/OpenGL issues** | Launch the sandbox with `SDL_VIDEODRIVER=x11` if the default video driver fails. |
+| **CTest cannot find tests** | Ensure `./build.sh ... voxel_tests` ran before invoking `ctest` inside the build directory. |

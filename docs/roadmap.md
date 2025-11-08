@@ -2,6 +2,12 @@
 
 This roadmap highlights the upcoming work required to evolve AlmondVoxel into a production-ready voxel foundation. Items are grouped by horizon and focus on capabilities that unlock new workflows for downstream engines.
 
+## Table of contents
+- [Short-term (next release)](#short-term-next-release)
+- [Mid-term (next-quarter)](#mid-term-next-quarter)
+- [Long-term (6–12 months)](#long-term-6–12-months)
+- [Staying current](#staying-current)
+
 ## Short-term (next release)
 - **Noise pipeline presets** – ship curated biome tables and noise stacks for desert, tundra, and volcanic regions.
 - **Mesh optimisation toggles** – expose compile-time flags for greedy mesher decimation and lightmap UV generation.
