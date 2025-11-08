@@ -21,3 +21,27 @@ TEST_CASE(region_manager_readonly_task_keeps_chunk_clean) {
     CHECK(processed == 1);
     CHECK_FALSE(chunk.dirty());
 }
+
+TEST_CASE(region_manager_unpin_requeues_for_eviction) {
+    region_manager regions{cubic_extent(4)};
+    const region_key pinned{0, 0, 0};
+    const region_key other{1, 0, 0};
+    const region_key replacement{2, 0, 0};
+
+    regions.set_max_resident(1);
+
+    regions.assure(pinned);
+    regions.pin(pinned);
+
+    regions.assure(other);
+    regions.tick(0);
+    CHECK_FALSE(regions.find(other));
+
+    regions.unpin(pinned);
+
+    regions.assure(replacement);
+    regions.tick(0);
+
+    CHECK_FALSE(regions.find(pinned));
+    CHECK(regions.find(replacement));
+}
