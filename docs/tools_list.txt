@@ -1,15 +1,13 @@
 # Tooling inventory
 
-Core utilities used across AlmondVoxel development:
+Core utilities used to build and validate AlmondVoxel:
 
-- git
-- cmake
-- ninja
-- msvc
-- gcc/clang
-- vscode or vscodium
-- gitkraken (optional GUI)
-- vcpkg (optional package manager)
-- python (useful for scripting and data prep)
-- Vulkan SDK (required for advanced renderer profiling)
-- Preferred text editor for documentation touch-ups
+- Git – version control and submodule management.
+- CMake 3.23+ – project configuration and generation.
+- Ninja – preferred generator for fast builds (falls back to Makefiles or MSBuild when unavailable).
+- GCC / Clang / MSVC – primary compilers exercised across Linux, macOS, and Windows.
+- SDL3 – graphics/input dependency for `terrain_demo`.
+- Python 3 – ad-hoc scripting and data processing.
+- Ccache (Linux/macOS) or `clcache` (Windows) – optional compile caching.
+- vcpkg – optional dependency provider on Windows for SDL3 and future adapters.
+- Windows Terminal / VS Code / Visual Studio – editors and shells used during development.

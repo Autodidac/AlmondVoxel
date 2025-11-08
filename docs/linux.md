@@ -1,70 +1,99 @@
-# Linux guide
+# Linux & macOS guide
 
-This guide targets Debian/Ubuntu-like distributions but generalises to most modern Linux environments. Follow the steps below to install prerequisites, configure the examples, and tune runtime performance.
+This guide covers Debian/Ubuntu, Fedora, and macOS environments. The same steps apply to other Unix-like platforms with equivalent package names.
 
 ## Table of contents
 - [Prerequisites](#prerequisites)
-- [Install toolchain packages](#install-toolchain-packages)
-- [Configuration flags](#configuration-flags)
-- [Build and test flow](#build-and-test-flow)
+- [Install packages](#install-packages)
+- [Configure and build](#configure-and-build)
+- [Run demos, benchmarks, and tests](#run-demos-benchmarks-and-tests)
 - [Performance considerations](#performance-considerations)
 - [Troubleshooting](#troubleshooting)
 
 ## Prerequisites
-- **Compiler**: GCC 12+ or Clang 15+ with C++20 support.
-- **CMake**: 3.23 or newer for preset compatibility.
-- **Ninja** *(optional)*: improves build throughput for the examples/tests.
-- **Git**: used to fetch AlmondVoxel as a submodule.
+- **Compiler**: GCC 12+/Clang 15+ with C++20 support.
+- **CMake**: 3.23 or newer.
+- **Ninja** *(optional)*: preferred generator for faster builds. The scripts fall back to Makefiles when Ninja is absent.
+- **SDL3 development headers**: required by `terrain_demo`. Install `libsdl3-dev` on Debian/Ubuntu, `libsdl3-devel` on Fedora, or `brew install sdl3` on macOS.
+- **Git**: to clone/update AlmondVoxel and drive Git Bash on macOS if desired.
 
-Optional components:
-- **Vulkan SDK**: required when profiling the sandbox renderer with GPU capture tools.
-- **zstd/lz4 development packages**: provide faster compression backends for `region_io` when the macros enable them.
+Optional but helpful:
+- **Python 3**: useful for quick data-prep or benchmarking scripts.
+- **Ccache**: speeds up repeated rebuilds of the demo and test binaries.
 
-## Install toolchain packages
+## Install packages
+### Debian/Ubuntu
 ```bash
 sudo apt update
-sudo apt install build-essential cmake ninja-build git
+sudo apt install build-essential cmake ninja-build libsdl3-dev git
 ```
 
-Install optional compression libraries when toggling non-default backends:
+### Fedora/RHEL
 ```bash
-sudo apt install libzstd-dev liblz4-dev
+sudo dnf install gcc-c++ clang cmake ninja-build SDL3-devel git
 ```
 
-## Configuration flags
-The CMake scripts expose several `-D` options when configuring the examples:
-
-| Flag | Default | Description |
-| --- | --- | --- |
-| `ALMOND_VOXEL_ENABLE_IMGUI` | `ON` | Enables the ImGui UI inside `example_sandbox`. |
-| `ALMOND_VOXEL_ENABLE_PROFILING` | `OFF` | Toggles instrumentation for timing chunk/generation stages. |
-| `ALMOND_VOXEL_COMPRESSION` | `ZSTD` | Controls compression backend for region serialization (`RAW`, `LZ4`, `ZSTD`). |
-
-Pass them through `configure.sh`:
+### macOS (Homebrew)
 ```bash
-./cmake/configure.sh clang Release -DALMOND_VOXEL_ENABLE_PROFILING=ON
+brew install cmake ninja llvm sdl3 git
 ```
-
-## Build and test flow
+Add the brewed Clang to your `PATH` when building with it:
 ```bash
-./cmake/configure.sh gcc Debug
-./build.sh gcc Debug voxel_tests
-./run.sh gcc Debug voxel_tests
-./run.sh gcc Debug example_sandbox
+export CC=$(brew --prefix llvm)/bin/clang
+export CXX=$(brew --prefix llvm)/bin/clang++
 ```
 
-`install.sh` packages headers and built binaries into `built/gcc-Debug`, making it easy to drop the artifacts into another project.
+## Configure and build
+Create the build tree with the helper script:
+```bash
+./cmake/configure.sh clang Debug
+# or ./cmake/configure.sh gcc Release
+```
+
+Compile all targets for the selected configuration:
+```bash
+./build.sh clang Debug
+```
+
+To install headers and executables under `built/bin/<Compiler>-<Config>/`:
+```bash
+./install.sh clang Debug
+```
+
+Disable optional components during configuration if you do not need them:
+```bash
+./cmake/configure.sh gcc Release -DALMOND_VOXEL_BUILD_EXAMPLES=OFF
+```
+
+## Run demos, benchmarks, and tests
+The `run.sh` helper searches common build folders for the requested binary:
+```bash
+./run.sh terrain_demo
+./run.sh greedy_mesher_example
+./run.sh mesh_bench
+```
+
+Execute the test suite either through `run.sh` or directly via CTest:
+```bash
+./run.sh almond_voxel_tests
+# or
+cd Bin/Clang-Debug
+ctest --output-on-failure
+```
+
+To run only headless components in CI or remote servers, disable the SDL3 demo during configuration and invoke `classic_heightfield_example`, `greedy_mesher_example`, `marching_cubes_example`, `mesh_bench`, and `almond_voxel_tests` manually.
 
 ## Performance considerations
-- Enable `-march=native` by exporting `CXXFLAGS="-march=native"` before running `configure.sh` to leverage CPU-specific instructions.
-- Use `ALMOND_VOXEL_CHUNK_SIZE=16` for terrain that favours rapid updates; use `64` for far terrain with fewer edits.
-- When profiling, disable ImGui by setting `-DALMOND_VOXEL_ENABLE_IMGUI=OFF` to remove UI overhead.
-- For headless benchmarks, build only the CLI example: `./build.sh gcc Release example_streaming`.
+- Export `CXXFLAGS="-O3 -march=native"` (or `-mcpu=native` on Apple Silicon) before configuring to enable CPU-specific optimisations.
+- Lower chunk dimensions (e.g., `chunk_extent{16, 16, 16}`) accelerate meshing and editing loops when prototyping interactive tools.
+- Use `mesh_bench` to evaluate greedy meshing throughput across compiler flags or architecture changes.
+- When profiling `terrain_demo`, run it with `SDL_VIDEODRIVER=x11` on Wayland setups to avoid driver throttling.
 
 ## Troubleshooting
 | Symptom | Resolution |
 | --- | --- |
-| **Ninja not found** | Install via `sudo apt install ninja-build` or remove `ninja-build` from the path to fall back to Makefiles. |
-| **Missing compression libraries** | Install `libzstd-dev` or `liblz4-dev` when enabling non-default compression modes. |
-| **Wayland/OpenGL issues** | Launch the sandbox with `SDL_VIDEODRIVER=x11` if the default video driver fails. |
-| **CTest cannot find tests** | Ensure `./build.sh ... voxel_tests` ran before invoking `ctest` inside the build directory. |
+| **CMake cannot find SDL3** | Confirm the development package is installed. Provide an explicit `CMAKE_PREFIX_PATH` (e.g., `/usr/lib/cmake/SDL3`) or set `SDL3_DIR` before running `configure.sh`. |
+| **`run.sh` reports “No runnable example was found”** | Ensure the build step succeeded and that binaries live under `Bin/<Compiler>-<Config>/`. Pass the compiler/configuration used during `configure.sh` to `build.sh`. |
+| **Linker errors referencing `std::filesystem`** | Build with GCC 12+ or Clang 15+; older toolchains lack the required standard library support. |
+| **macOS codesign prompt when launching `terrain_demo`** | The demo is unsigned; approve the dialog in *System Settings → Privacy & Security* and rerun. |
+| **CTest exits with zero tests** | Build once with `./build.sh <compiler> <config>` to generate `almond_voxel_tests` before invoking CTest inside the build directory. |

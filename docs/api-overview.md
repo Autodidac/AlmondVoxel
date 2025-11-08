@@ -1,105 +1,139 @@
 # API overview
 
-This document catalogues the AlmondVoxel headers, the CMake interface they expose, and recommended patterns for embedding the toolkit in your voxel engine or game. Use it as a quick reference when wiring new modules, toggling configuration macros, or extending the examples.
+This document catalogues the AlmondVoxel headers, describes the interface target exported by CMake, and highlights recommended usage patterns for demos, internal tooling, and automated tests.
 
 ## Table of contents
 - [Module map](#module-map)
 - [Interface target](#interface-target)
 - [Usage patterns](#usage-patterns)
-  - [Chunk streaming](#chunk-streaming)
+  - [Streaming regions](#streaming-regions)
   - [Greedy mesh extraction](#greedy-mesh-extraction)
   - [Marching cubes surfaces](#marching-cubes-surfaces)
+  - [Terrain sampling](#terrain-sampling)
   - [Serialization](#serialization)
-- [Extending the library](#extending-the-library)
-- [Testing helpers](#testing-helpers)
+  - [Editing helpers](#editing-helpers)
+- [Testing harness](#testing-harness)
+- [Internal extensions](#internal-extensions)
 
 ## Module map
-The headers are organised by domain. All headers can be accessed individually or through the umbrella include `almond_voxel/almond_voxel.hpp`.
+All headers live under `include/almond_voxel/`. Include `almond_voxel/almond_voxel.hpp` for the full toolkit or pull in the modules you need individually.
 
-| Header | Description | Key types/functions | Configuration flags |
-| --- | --- | --- | --- |
-| `almond_voxel/core.hpp` | Core math utilities, voxel traits, axis-aligned helpers. | `voxel_id`, `chunk_index`, `axis_extent`, `wrap_coordinates`. | `ALMOND_VOXEL_COORD_WRAP` toggles modulo wrapping across world bounds. |
-| `almond_voxel/chunk.hpp` | Sparse chunk containers with cache-aware storage backends. | `chunk_storage`, `chunk_ref`, `chunk_layer`. | `ALMOND_VOXEL_CHUNK_SIZE` (default 32) controls edge length. |
-| `almond_voxel/world.hpp` | Region manager orchestrating chunk residency and eviction. | `region_id`, `region_manager`, `region_ticket`. | `ALMOND_VOXEL_MAX_RESIDENT` limits total loaded chunks. |
-| `almond_voxel/generation/noise.hpp` | Noise functions and combinators for terrain density. | `value_noise`, `ridged_noise`, `fractal_combine`. | `ALMOND_VOXEL_NOISE_FREQUENCY`, `ALMOND_VOXEL_SEED`. |
-| `almond_voxel/generation/biomes.hpp` | Biome layering helpers for climate and material blending. | `biome_map`, `climate_profile`, `biome_picker`. | `ALMOND_VOXEL_BIOME_TABLE` selects predefined profiles. |
-| `almond_voxel/meshing/greedy_mesher.hpp` | Greedy mesher that emits indexed triangle meshes. | `greedy_mesh`, `mesh_buffer`, `mesh_config`. | `ALMOND_VOXEL_ENABLE_DECIMATION` toggles vertex deduplication. |
-| `almond_voxel/meshing/marching_cubes.hpp` | Smooth surface extraction using marching cubes. | `marching_cubes`, `marching_cubes_from_chunk`, `iso_config`. | `ALMOND_VOXEL_MC_GRADIENTS` enables gradient-based normals. |
-| `almond_voxel/serialization/region_io.hpp` | Streaming helpers for async persistence. | `region_writer`, `region_reader`, `compression_mode`. | `ALMOND_VOXEL_COMPRESSION` selects zstd/lz4/raw. |
-| `almond_voxel/testing/doctest.hpp` | Thin wrapper bundling doctest defaults. | `ALMOND_VOXEL_TEST_MAIN`. | `ALMOND_VOXEL_ENABLE_ASSERTS` routes internal checks to doctest. |
+| Header | Description | Key types/functions |
+| --- | --- | --- |
+| `almond_voxel/core.hpp` | Fundamental voxel/value types, extent utilities, and `span3d` helpers. | `voxel_id`, `chunk_extent`, `cubic_extent`, `span3d` |
+| `almond_voxel/chunk.hpp` | Chunk storage with lighting/metadata channels, compression hooks, and dirty tracking. | `chunk_storage`, `chunk_extent::volume`, `chunk_storage::set_compression_hooks` |
+| `almond_voxel/world.hpp` | Region streaming, pinning, loader/saver callbacks, and task scheduling. | `region_manager`, `region_key`, `region_manager::tick` |
+| `almond_voxel/generation/noise.hpp` | Deterministic value noise and palette utilities for procedural generation. | `generation::value_noise`, `palette_builder`, `palette_entry` |
+| `almond_voxel/terrain/classic.hpp` | Classic layered terrain sampler suitable for demo height fields. | `terrain::classic_heightfield`, `terrain::classic_config` |
+| `almond_voxel/editing/voxel_editing.hpp` | Brush operations for carving or filling regions. | `editing::apply_sphere`, `editing::apply_box`, `editing::visit_region` |
+| `almond_voxel/meshing/mesh_types.hpp` | Vertex/index containers used by meshing routines. | `meshing::mesh_buffer`, `meshing::vertex` |
+| `almond_voxel/meshing/greedy_mesher.hpp` | Greedy mesher producing blocky triangle meshes from chunk data. | `meshing::greedy_mesh` |
+| `almond_voxel/meshing/marching_cubes.hpp` | Iso-surface mesher for smooth terrain. | `meshing::marching_cubes`, `meshing::marching_cubes_from_chunk` |
+| `almond_voxel/serialization/region_io.hpp` | Binary snapshot helpers for regions and chunk payloads. | `serialization::serialize_chunk`, `serialization::make_region_serializer` |
+| `tests/test_framework.hpp` | Lightweight assertion/registration utilities shared by examples and tests. | `TEST_CASE`, `CHECK`, `run_tests` |
 
 ## Interface target
-AlmondVoxel exports the `almond_voxel` target as an `INTERFACE` library. It is header-only and propagates required compile definitions based on the configuration flags described above.
+AlmondVoxel installs as an `INTERFACE` library. Downstream projects inherit include paths automatically and do not link against a compiled binary.
 
 ```cmake
 add_subdirectory(external/AlmondVoxel)
 
 add_executable(worldgen main.cpp)
 target_link_libraries(worldgen PRIVATE almond_voxel)
-
-# Override defaults
-set_target_properties(worldgen PROPERTIES
-    INTERFACE_COMPILE_DEFINITIONS "ALMOND_VOXEL_CHUNK_SIZE=64;ALMOND_VOXEL_COMPRESSION=ZSTD"
-)
 ```
 
-For non-CMake build systems, add `include/` to your compiler's search path and provide the same defines manually.
+When the repository is used directly, the helper scripts configure the `almond_voxel` target along with demos, tests, and benchmarks. To exclude optional components, pass the relevant `-DALMOND_VOXEL_BUILD_*` cache variables to `cmake/configure.sh` or the underlying CMake invocation.
 
 ## Usage patterns
-### Chunk streaming
+### Streaming regions
 ```cpp
 #include <almond_voxel/world.hpp>
-#include <almond_voxel/generation/noise.hpp>
+#include <almond_voxel/terrain/classic.hpp>
 
-almond::voxel::chunk_storage storage;
-almond::voxel::region_manager manager{storage};
+almond::voxel::region_manager manager{almond::voxel::cubic_extent(32)};
+almond::voxel::terrain::classic_heightfield generator{};
 
-manager.ensure_region({0, 0, 0}, [&](auto& chunk) {
-    almond::voxel::generate::apply_noise(
-        chunk,
-        almond::voxel::generate::ridged_noise{.frequency = 0.012f});
+manager.set_loader([&](const almond::voxel::region_key& key) {
+    return generator(key);
 });
+
+manager.set_max_resident(64);
+manager.pin({0, 0, 0});
+manager.enqueue_task({0, 0, 0}, [](auto& chunk, auto) {
+    chunk.fill(almond::voxel::voxel_id{2});
+});
+manager.tick();
 ```
 
 ### Greedy mesh extraction
 ```cpp
 #include <almond_voxel/meshing/greedy_mesher.hpp>
+#include <almond_voxel/chunk.hpp>
 
-almond::voxel::mesh_config cfg;
-cfg.enable_decimation = true;
-
-almond::voxel::mesh_buffer mesh = almond::voxel::meshing::greedy_mesh(chunk, cfg);
+almond::voxel::chunk_storage chunk{almond::voxel::cubic_extent(32)};
+chunk.fill(almond::voxel::voxel_id{1});
+const auto mesh = almond::voxel::meshing::greedy_mesh(chunk);
 ```
 
 ### Marching cubes surfaces
 ```cpp
 #include <almond_voxel/meshing/marching_cubes.hpp>
+#include <almond_voxel/generation/noise.hpp>
 
-auto buffer = almond::voxel::meshing::marching_cubes_from_chunk(
-    chunk,
-    almond::voxel::meshing::iso_config{
-        .iso_level = 0.25f,
-        .generate_gradients = true});
+almond::voxel::chunk_storage chunk{almond::voxel::cubic_extent(32)};
+auto voxels = chunk.voxels();
+almond::voxel::generation::value_noise noise{1337, 0.04};
+for (std::uint32_t z = 0; z < chunk.extent().z; ++z) {
+    for (std::uint32_t y = 0; y < chunk.extent().y; ++y) {
+        for (std::uint32_t x = 0; x < chunk.extent().x; ++x) {
+            const double density = noise.sample(x, y, z);
+            voxels(x, y, z) = density > 0.0 ? almond::voxel::voxel_id{1} : almond::voxel::voxel_id{};
+        }
+    }
+}
+const auto smooth_mesh = almond::voxel::meshing::marching_cubes_from_chunk(chunk);
+```
+
+### Terrain sampling
+```cpp
+#include <almond_voxel/terrain/classic.hpp>
+
+almond::voxel::terrain::classic_heightfield terrain{};
+auto chunk = terrain({0, 0, 0});
+double height = terrain.sample_height(32.5, 48.0);
 ```
 
 ### Serialization
 ```cpp
 #include <almond_voxel/serialization/region_io.hpp>
 
-almond::voxel::region_writer writer{"./regions"};
-writer.save(manager, {0, 0, 0}, almond::voxel::compression_mode::zstd);
+almond::voxel::chunk_storage chunk{almond::voxel::cubic_extent(16)};
+chunk.fill(almond::voxel::voxel_id{3});
+
+std::vector<std::byte> payload = almond::voxel::serialization::serialize_chunk(chunk);
+auto restored = almond::voxel::serialization::deserialize_chunk(payload);
 ```
 
-## Extending the library
-1. Place headers under an appropriate domain folder inside `include/almond_voxel/`.
-2. Update the umbrella header (`almond_voxel/almond_voxel.hpp`) to export the new module.
-3. Document behaviour and configuration macros in this overview.
-4. Add doctest coverage under `tests/` and, if relevant, surface the feature inside one of the example applications.
-5. Reference the change in `docs/CHANGELOG.md` and update the roadmap if it impacts the near-term goals.
+### Editing helpers
+```cpp
+#include <almond_voxel/editing/voxel_editing.hpp>
+#include <almond_voxel/chunk.hpp>
 
-## Testing helpers
-The `voxel_tests` target is built with doctest and includes fixtures for chunk allocation, deterministic noise sequences, and mesh comparators. When creating new tests:
+almond::voxel::chunk_storage chunk{almond::voxel::cubic_extent(32)};
+almond::voxel::editing::apply_sphere(chunk, {16, 16, 16}, 10.0f, almond::voxel::voxel_id{5});
+```
 
-- Include `almond_voxel/testing/doctest.hpp` to pick up the shared configuration.
-- Use `ALMOND_VOXEL_ENABLE_ASSERTS` to mirror runtime assertions inside tests.
-- Gate experimental modules behind `ALMOND_VOXEL_EXPERIMENTAL` and document the flag here.
+## Testing harness
+`tests/test_framework.hpp` exposes macros that register tests automatically. The `almond_voxel_tests` executable pulls in all sources listed in `tests/test_sources.cmake` and calls `almond::voxel::test::run_tests()` from `tests/test_main.cpp`.
+
+When adding new test files, list them in `tests/test_sources.cmake` and include `tests/test_framework.hpp` to gain access to `TEST_CASE`, `CHECK`, and related helpers.
+
+## Internal extensions
+New headers or features should:
+
+1. Live under an appropriate domain folder inside `include/almond_voxel/` and be wired into `almond_voxel/almond_voxel.hpp` if they are part of the public interface.
+2. Provide a focused example or usage snippet in `examples/` when applicable.
+3. Register coverage under `tests/` so automated builds exercise the behaviour.
+4. Update the documentation set (README, platform guides, and this overview) so the new functionality is discoverable.
+
+The project is curated internally; external change requests are not accepted.

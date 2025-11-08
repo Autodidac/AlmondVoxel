@@ -1,174 +1,122 @@
 # AlmondVoxel
 
-AlmondVoxel is a header-only C++20 voxel framework that packages spatial data structures, procedural generation pipelines, and rendering-friendly mesh extraction utilities into a single, easily embeddable library. The repository also ships curated examples and regression tests that demonstrate how to stream infinite worlds, serialize regions, and validate greedy/marching-cubes meshes.
+AlmondVoxel is a header-only C++20 voxel toolkit that bundles chunked storage, region streaming utilities, terrain helpers, and meshing algorithms in a single interface library. The repository ships runnable demos, a benchmark, and a consolidated unit-test executable so the same code paths are exercised on Linux, macOS, and Windows builds.
 
 ## Table of contents
 - [Overview](#overview)
-- [Key capabilities](#key-capabilities)
-- [Getting started](#getting-started)
-  - [Add the library to another project](#add-the-library-to-another-project)
-  - [Local build and scripts](#local-build-and-scripts)
+- [Library modules](#library-modules)
+- [Build and run](#build-and-run)
+  - [Configure the build tree](#configure-the-build-tree)
+  - [Compile targets](#compile-targets)
+  - [Run demos and benchmarks](#run-demos-and-benchmarks)
+  - [Execute tests](#execute-tests)
 - [Repository layout](#repository-layout)
-- [Tooling scripts](#tooling-scripts)
+- [Cross-platform notes](#cross-platform-notes)
 - [Documentation map](#documentation-map)
-- [Contributing](#contributing)
-- [License](#license)
+- [Maintenance](#maintenance)
 
 ## Overview
-- **Header-only distribution** – `almond_voxel` is exported as a pure header target that works with any C++20 toolchain without pre-built binaries.
-- **Chunked world management** – deterministic coordinate math with paging, caching, and eviction hooks for infinite terrain.
-- **Procedural generation primitives** – layered noise utilities, biome combinators, and density functions optimised for sparse updates.
-- **Greedy meshing and marching cubes** – produces render-ready meshes with configurable material channels and atlas packing.
-- **Binary serialization helpers** – compress and stream regions to disk or network transports with background worker helpers.
-- **Examples and tests** – sandbox applications and doctest suites that illustrate integration patterns and protect regressions.
+- **Header-only interface** – the `almond_voxel` target exports all headers without requiring a separate compile/install step.
+- **Chunk & region management** – `chunk_storage` and `region_manager` orchestrate voxel residency with optional compression hooks.
+- **Terrain helpers** – `terrain::classic` utilities and editing helpers make it easy to prototype generators.
+- **Meshing pipelines** – greedy and marching-cubes meshers emit render-ready buffers from chunk data.
+- **Serialization utilities** – `serialization::region_io` provides compression-aware save/load entry points.
+- **Integrated validation** – the `almond_voxel_tests` binary covers chunk math, meshing, terrain sampling, serialization, and editing behaviours.
 
-Two Mermaid diagrams summarise the runtime architecture and build artefacts:
+## Library modules
+The umbrella header `almond_voxel/almond_voxel.hpp` includes the modules below. Headers can also be included individually for finer-grained builds.
 
-```mermaid
-graph LR
-    subgraph Core
-        VoxelCore[core.hpp\nvoxel traits]
-        Chunk[chunk.hpp\nchunk_storage]
-        Region[world.hpp\nregion_manager]
-    end
-    subgraph Pipelines
-        Noise[generation/noise.hpp\nvalue & domain noise]
-        Biomes[generation/biomes.hpp\nlayer combinators]
-        Mesher[meshing/greedy_mesher.hpp\nmesh extraction]
-        Serializer[serialization/region_io.hpp\nasync IO]
-    end
-    subgraph Integrations
-        TerrainDemo[examples::terrain_demo\nclip-aware raster]
-        ExampleApp[examples::sandbox]
-        Tests[tests::voxel_checks]
-    end
+| Header | Highlights | Key types/functions |
+| --- | --- | --- |
+| `almond_voxel/core.hpp` | Coordinate math, voxel/span helpers, extent utilities. | `voxel_id`, `chunk_extent`, `span3d`, `cubic_extent` |
+| `almond_voxel/chunk.hpp` | Chunk storage with lighting/metadata planes and optional compression callbacks. | `chunk_storage`, `chunk_extent`, `voxel_span` |
+| `almond_voxel/world.hpp` | Region streaming with pinning, task queues, and eviction. | `region_manager`, `region_key`, `region_snapshot` |
+| `almond_voxel/generation/noise.hpp` | Deterministic value noise with palette assignment helpers. | `generation::value_noise`, `palette_builder` |
+| `almond_voxel/terrain/classic.hpp` | Ready-made terrain sampling routines layered over noise. | `terrain::classic_heightmap`, `terrain::build_palette` |
+| `almond_voxel/editing/voxel_editing.hpp` | Utilities for carving and painting voxel regions. | `editing::apply_sphere`, `editing::apply_box` |
+| `almond_voxel/meshing/mesh_types.hpp` | Mesh data containers and attribute helpers. | `meshing::mesh_buffer`, `meshing::vertex` |
+| `almond_voxel/meshing/greedy_mesher.hpp` | Greedy meshing for blocky voxel worlds. | `meshing::greedy_mesh` |
+| `almond_voxel/meshing/marching_cubes.hpp` | Smooth surface extraction. | `meshing::marching_cubes`, `meshing::marching_cubes_from_chunk` |
+| `almond_voxel/serialization/region_io.hpp` | Save/load regions with pluggable compressors. | `serialization::region_writer`, `serialization::region_reader` |
+| `tests/test_framework.hpp` | Lightweight assertion macros shared by demos and the consolidated test runner. | `TEST_CASE`, `CHECK`, `run_tests` |
 
-    VoxelCore --> Chunk --> Region
-    Region --> Noise
-    Region --> Biomes
-    Chunk --> Mesher --> TerrainDemo
-    Noise --> TerrainDemo
-    Region --> TerrainDemo
-    Mesher --> ExampleApp
-    Region --> Serializer --> ExampleApp
-    Noise --> Tests
-    Mesher --> Tests
-```
+## Build and run
+All helper scripts live at the repository root. They create per-compiler build folders under `Bin/` and work across Linux (GCC/Clang) and Windows (MSVC + Ninja Multi-Config).
 
-```mermaid
-graph TD
-    subgraph Build Targets
-        HeaderOnly[[INTERFACE almond_voxel]]
-        ExampleSandbox[[example_sandbox]]
-        ExampleStreaming[[example_streaming]]
-        TerrainDemo[[terrain_demo\nnear/far clipping]]
-        TestSuite[[voxel_tests]]
-    end
-
-    HeaderOnly --> ExampleSandbox
-    HeaderOnly --> ExampleStreaming
-    HeaderOnly --> TerrainDemo
-    HeaderOnly --> TestSuite
-
-    subgraph Tooling
-        Configure[configure.sh]
-        Build[build.sh]
-        Install[install.sh]
-        Run[run.sh]
-    end
-
-    Configure --> Build --> TestSuite
-    Build --> Install --> ExampleSandbox
-    Build --> Run --> ExampleStreaming
-    Run --> TerrainDemo
-```
-
-## Key capabilities
-The library is split into focused modules that can be composed together or consumed individually:
-
-| Domain | Highlights |
-| --- | --- |
-| **Core math & storage** | `core.hpp`, `chunk.hpp`, and `world.hpp` define the voxel coordinate types, chunk storage, and region manager abstractions. |
-| **Generation** | `generation/noise.hpp` and `generation/biomes.hpp` provide deterministic value/domain noise stacks and biome combinators. |
-| **Meshing** | `meshing/greedy_mesher.hpp` implements greedy meshing and exposes marching cubes helpers for smooth surfaces. |
-| **Serialization** | `serialization/region_io.hpp` streams regions using raw, LZ4, or Zstd compression and async IO helpers. |
-| **Testing** | `testing/doctest.hpp` bundles doctest defaults and assertion helpers for downstream verification. |
-
-## Getting started
-### Add the library to another project
-AlmondVoxel is easiest to consume via CMake:
-
-```cmake
-add_subdirectory(external/AlmondVoxel)
-target_link_libraries(my_voxel_app PRIVATE almond_voxel)
-```
-
-Include the aggregated header from your source files:
-
-```cpp
-#include <almond_voxel/almond_voxel.hpp>
-
-using namespace almond::voxel;
-
-chunk_storage chunks;
-region_manager regions{chunks};
-region_id origin{0, 0, 0};
-regions.ensure_region(origin, [&](auto& chunk) {
-    generate::apply_noise(chunk, generate::value_noise{});
-});
-mesh_buffer mesh = meshing::greedy_mesh(regions.require_chunk(origin));
-```
-
-For smooth implicit surfaces, call `meshing::marching_cubes_from_chunk` to extract a marching cubes mesh or provide a custom density sampler to `meshing::marching_cubes`.
-
-If you cannot add the directory as a subproject, copy the `include/almond_voxel` tree into your build and add it to the include path while defining the `ALMOND_VOXEL_HEADER_ONLY` macro.
-
-### Local build and scripts
-Even though the core library is header-only, the scripts orchestrate configuration and builds for the bundled examples and tests:
-
+### Configure the build tree
 ```bash
-./cmake/configure.sh <compiler> <config>
-# e.g. ./cmake/configure.sh clang Release
+./cmake/configure.sh <gcc|clang|msvc> <Debug|Release>
+# Example: ./cmake/configure.sh clang Release
+```
+The script auto-detects Ninja on Unix platforms and falls back to Makefiles when necessary. Passing `msvc` selects the Ninja Multi-Config generator so both Debug and Release binaries can coexist.
 
-./build.sh <compiler> <config> [target]
-# e.g. ./build.sh gcc Debug example_sandbox
+### Compile targets
+```bash
+./build.sh <gcc|clang|msvc> <Debug|Release>
+# Example: ./build.sh gcc Debug
+```
+This compiles the interface library plus all enabled demos, tests, and benchmarks for the chosen configuration. CMake options `ALMOND_VOXEL_BUILD_EXAMPLES`, `ALMOND_VOXEL_BUILD_TESTS`, and `ALMOND_VOXEL_BUILD_BENCHMARKS` default to `ON`; toggle them during configuration if you need a slimmer build.
 
-./install.sh <compiler> <config>
-
-./run.sh <compiler> <config> [example_sandbox|example_streaming|voxel_tests]
+To install headers and built executables into `built/bin/<Compiler>-<Config>/`:
+```bash
+./install.sh <gcc|clang|msvc> <Debug|Release>
 ```
 
-Because the library is header-only, rebuilding after modifying headers is typically instantaneous; only dependent examples or tests need recompilation.
+### Run demos and benchmarks
+The repository provides runnable targets that exercise different parts of the library:
+
+| Target | Description |
+| --- | --- |
+| `terrain_demo` | SDL3-powered viewport that streams regions, applies editing brushes, and renders greedy meshes. |
+| `classic_heightfield_example` | Console sample that generates a simple height map and prints summary metrics. |
+| `greedy_mesher_example` | Demonstrates greedy mesh extraction for a procedurally generated chunk. |
+| `marching_cubes_example` | Extracts a smooth mesh from noise-populated data. |
+| `mesh_bench` | Command-line benchmark measuring greedy meshing throughput. |
+
+Use `run.sh` to search common build directories and launch a binary:
+```bash
+./run.sh terrain_demo
+./run.sh greedy_mesher_example
+```
+On Windows PowerShell, invoke the script through `bash` (included with Git for Windows):
+```powershell
+bash ./run.sh terrain_demo
+```
+
+### Execute tests
+The unit-test binary is built alongside the demos:
+```bash
+./run.sh almond_voxel_tests
+```
+Or run the tests via CTest from the build directory if you prefer native tooling:
+```bash
+cd Bin/GCC-Debug  # adjust for your compiler/configuration
+ctest --output-on-failure
+```
 
 ## Repository layout
 | Path | Purpose |
 | --- | --- |
-| `include/almond_voxel/` | Header-only library organised by domain (core, generation, meshing, serialization). |
-| `examples/sandbox/` | Interactive ImGui viewer that visualises chunk streaming and material layering. |
-| `examples/streaming_cli/` | Console demo that benchmarks procedural generation pipelines. |
-| `tests/` | doctest-powered regression suite for chunk math, greedy and marching-cubes meshing, and serialization codecs. |
-| `cmake/` | Toolchain helpers, presets, and exported CMake package configuration. |
-| `docs/` | Architecture notes, platform guides, roadmap, and API reference. |
+| `include/almond_voxel/` | Header-only library organised by domain (core, world, generation, terrain, editing, meshing, serialization). |
+| `examples/` | Sample applications listed in the table above. |
+| `tests/` | Doctest-based unit tests compiled into `almond_voxel_tests`. |
+| `benchmarks/` | Performance harnesses such as `mesh_bench`. |
+| `cmake/` | Configuration scripts, including `configure.sh`. |
+| `docs/` | Platform guides, API overview, roadmap, and changelog. |
+| `readme/` | Visual Studio helper documentation for cross-platform projects. |
 
-## Tooling scripts
-1. **Configure the CMake build tree** – creates `Bin/<compiler>-<config>` with the `almond_voxel` interface target plus example/test executables.
-2. **Build examples and tests** – defaults to building all registered targets. Pass a target name (e.g. `voxel_tests`) to narrow the build.
-3. **Install headers and samples** – copies headers and compiled artefacts into `built/<compiler>-<config>` for redistribution.
-4. **Run demos or tests** – launches the requested binary or falls back to the default sandbox demo.
+## Cross-platform notes
+- **Linux & macOS** – install a C++20 compiler (GCC 12+/Clang 15+), CMake 3.23+, Ninja (optional), and SDL3 development headers for the terrain demo (`libsdl3-dev` on Debian/Ubuntu, `brew install sdl3` on macOS).
+- **Windows** – use Visual Studio 2022 or the MSVC Build Tools with CMake/Ninja. SDL3 binaries can be supplied via [vcpkg](https://github.com/microsoft/vcpkg) (`vcpkg install sdl3`) or the official development packages. Invoke the scripts from *x64 Native Tools* or *Developer PowerShell* so the compiler is on `PATH`.
+- **Headless environments** – build `classic_heightfield_example`, `greedy_mesher_example`, `marching_cubes_example`, `mesh_bench`, and `almond_voxel_tests`. The SDL3-based `terrain_demo` can be skipped by setting `-DALMOND_VOXEL_BUILD_EXAMPLES=OFF` or by disabling SDL3 discovery.
 
 ## Documentation map
-- [docs/api-overview.md](docs/api-overview.md) summarises each header module and provides integration snippets.
-- [docs/roadmap.md](docs/roadmap.md) outlines upcoming voxel engine milestones.
-- Platform guides ([docs/linux.md](docs/linux.md), [docs/windows.md](docs/windows.md)) enumerate compiler flags, configuration toggles, and performance tuning tips.
-- [docs/CHANGELOG.md](docs/CHANGELOG.md) tracks the full history of template changes.
+- [docs/api-overview.md](docs/api-overview.md) – module-by-module reference with example snippets.
+- [docs/linux.md](docs/linux.md) – Linux/macOS setup, build, and troubleshooting guide.
+- [docs/windows.md](docs/windows.md) – Windows-specific setup and workflow notes.
+- [docs/CHANGELOG.md](docs/CHANGELOG.md) – release history and documentation updates.
+- [docs/roadmap.md](docs/roadmap.md) – internal milestones for upcoming work.
+- [docs/tools_list.txt](docs/tools_list.txt) – snapshot of the toolchain used to maintain the project.
 
-## Contributing
-We welcome contributions that expand the voxel toolkit, improve performance, or enhance documentation. Please:
-
-- Open a GitHub issue or discussion describing the feature or fix you plan to work on.
-- Link updates to the roadmap and API overview so downstream users can track new modules or changed behaviours.
-- Accompany new modules with examples and doctest coverage to guard against regressions.
-- Follow the formatting and naming conventions established under `include/almond_voxel`.
-
-## License
-AlmondVoxel is released under the MIT License. See [LICENSE](LICENSE) for full terms. Commercial usage is permitted; contributions remain under the same license unless explicitly stated otherwise.
+## Maintenance
+AlmondVoxel is maintained privately and published for reference. External contributions, pull requests, and unsolicited patches are not being accepted.
