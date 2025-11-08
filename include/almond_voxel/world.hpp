@@ -122,6 +122,7 @@ inline void region_manager::pin(const region_key& key) {
 inline void region_manager::unpin(const region_key& key) {
     if (auto it = regions_.find(key); it != regions_.end()) {
         it->second.pinned = false;
+        touch(key);
     }
 }
 
