@@ -136,7 +136,6 @@ inline std::size_t region_manager::tick(std::size_t budget) {
         auto& chunk = assure(key);
         if (task) {
             task(chunk, key);
-            chunk.mark_dirty();
         }
         ++processed;
     }
