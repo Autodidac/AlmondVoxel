@@ -272,6 +272,7 @@ struct projected_triangle {
     std::uint32_t sequence{};
     mesher_choice mesher{mesher_choice::greedy};
     float3 normal{};
+    std::array<float3, 3> camera_vertices{};
 };
 
 struct clip_vertex {
@@ -444,6 +445,179 @@ constexpr std::array<std::pair<int, int>, 12> box_edges{std::to_array<std::pair<
     std::pair{3, 7},
 })};
 
+struct depth_buffer {
+    int width{};
+    int height{};
+    int downsample{1};
+    std::vector<float> values;
+
+    [[nodiscard]] bool valid() const noexcept {
+        return width > 0 && height > 0 && downsample > 0 && !values.empty();
+    }
+
+    [[nodiscard]] float sample(float screen_x, float screen_y) const noexcept {
+        if (!valid()) {
+            return std::numeric_limits<float>::infinity();
+        }
+        const float scale = static_cast<float>(downsample);
+        int ix = static_cast<int>(std::floor(screen_x / scale));
+        int iy = static_cast<int>(std::floor(screen_y / scale));
+        if (ix < 0 || iy < 0 || ix >= width || iy >= height) {
+            return std::numeric_limits<float>::infinity();
+        }
+        return values[static_cast<std::size_t>(iy) * static_cast<std::size_t>(width) + static_cast<std::size_t>(ix)];
+    }
+};
+
+float edge_function(const SDL_FPoint& a, const SDL_FPoint& b, const SDL_FPoint& c) {
+    return (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x);
+}
+
+depth_buffer build_depth_buffer(const overlay_input& input) {
+    depth_buffer buffer{};
+    if (input.output_width <= 0 || input.output_height <= 0 || input.triangles.empty()) {
+        return buffer;
+    }
+
+    constexpr int depth_downsample = 2;
+    buffer.downsample = depth_downsample;
+    buffer.width = std::max(1, (input.output_width + depth_downsample - 1) / depth_downsample);
+    buffer.height = std::max(1, (input.output_height + depth_downsample - 1) / depth_downsample);
+    buffer.values.assign(static_cast<std::size_t>(buffer.width) * static_cast<std::size_t>(buffer.height), input.cam.far_plane);
+
+    const auto to_buffer_point = [depth_downsample](const SDL_FPoint& point) {
+        return SDL_FPoint{point.x / static_cast<float>(depth_downsample), point.y / static_cast<float>(depth_downsample)};
+    };
+
+    for (const auto& tri : input.triangles) {
+        const SDL_FPoint p0 = to_buffer_point(tri.vertices[0].position);
+        const SDL_FPoint p1 = to_buffer_point(tri.vertices[1].position);
+        const SDL_FPoint p2 = to_buffer_point(tri.vertices[2].position);
+
+        float area = edge_function(p0, p1, p2);
+        if (std::abs(area) <= 1e-6f) {
+            continue;
+        }
+
+        const float min_xf = std::floor(std::min({p0.x, p1.x, p2.x}));
+        const float max_xf = std::ceil(std::max({p0.x, p1.x, p2.x}));
+        const float min_yf = std::floor(std::min({p0.y, p1.y, p2.y}));
+        const float max_yf = std::ceil(std::max({p0.y, p1.y, p2.y}));
+
+        const int min_x = std::max(0, static_cast<int>(min_xf));
+        const int max_x = std::min(buffer.width - 1, static_cast<int>(max_xf));
+        const int min_y = std::max(0, static_cast<int>(min_yf));
+        const int max_y = std::min(buffer.height - 1, static_cast<int>(max_yf));
+
+        if (min_x > max_x || min_y > max_y) {
+            continue;
+        }
+
+        const bool ccw = area > 0.0f;
+        if (!ccw) {
+            area = -area;
+        }
+
+        const float inv_z0 = 1.0f / std::max(tri.camera_vertices[0].z, input.cam.near_plane);
+        const float inv_z1 = 1.0f / std::max(tri.camera_vertices[1].z, input.cam.near_plane);
+        const float inv_z2 = 1.0f / std::max(tri.camera_vertices[2].z, input.cam.near_plane);
+
+        for (int y = min_y; y <= max_y; ++y) {
+            const float sample_y = static_cast<float>(y) + 0.5f;
+            for (int x = min_x; x <= max_x; ++x) {
+                const float sample_x = static_cast<float>(x) + 0.5f;
+                float w0 = edge_function(p1, p2, SDL_FPoint{sample_x, sample_y});
+                float w1 = edge_function(p2, p0, SDL_FPoint{sample_x, sample_y});
+                float w2 = edge_function(p0, p1, SDL_FPoint{sample_x, sample_y});
+
+                if (!ccw) {
+                    w0 = -w0;
+                    w1 = -w1;
+                    w2 = -w2;
+                }
+
+                if (w0 < 0.0f || w1 < 0.0f || w2 < 0.0f) {
+                    continue;
+                }
+
+                const float lambda0 = w0 / area;
+                const float lambda1 = w1 / area;
+                const float lambda2 = w2 / area;
+
+                const float inv_z = lambda0 * inv_z0 + lambda1 * inv_z1 + lambda2 * inv_z2;
+                if (inv_z <= 0.0f) {
+                    continue;
+                }
+
+                float depth = 1.0f / inv_z;
+                depth = std::clamp(depth, input.cam.near_plane, input.cam.far_plane);
+
+                const std::size_t index = static_cast<std::size_t>(y) * static_cast<std::size_t>(buffer.width)
+                    + static_cast<std::size_t>(x);
+                if (depth < buffer.values[index]) {
+                    buffer.values[index] = depth;
+                }
+            }
+        }
+    }
+
+    return buffer;
+}
+
+SDL_FPoint project_camera_point_to_screen(const float3& camera_point, const camera& cam, int width, int height) {
+    const float safe_width = static_cast<float>(std::max(width, 1));
+    const float safe_height = static_cast<float>(std::max(height, 1));
+    const float aspect = safe_width / safe_height;
+    const float f = 1.0f / std::tan(cam.fov * 0.5f);
+    const float ndc_x = (camera_point.x * f / aspect) / camera_point.z;
+    const float ndc_y = (camera_point.y * f) / camera_point.z;
+    return SDL_FPoint{
+        (ndc_x * 0.5f + 0.5f) * safe_width,
+        (0.5f - ndc_y * 0.5f) * safe_height
+    };
+}
+
+bool segment_fully_occluded(const float3& camera_start, const float3& camera_end,
+    const SDL_FPoint& screen_start, const SDL_FPoint& screen_end, const camera& cam,
+    int width, int height, const depth_buffer* depth, float depth_bias) {
+    if (depth == nullptr || !depth->valid()) {
+        return false;
+    }
+
+    const float segment_length = std::hypot(screen_end.x - screen_start.x, screen_end.y - screen_start.y);
+    constexpr float sample_spacing = 6.0f;
+    const int sample_count = std::max(1, static_cast<int>(std::ceil(segment_length / sample_spacing)));
+
+    for (int i = 0; i <= sample_count; ++i) {
+        const float t = sample_count == 0 ? 0.0f : static_cast<float>(i) / static_cast<float>(sample_count);
+        const float3 camera_point{
+            camera_start.x + (camera_end.x - camera_start.x) * t,
+            camera_start.y + (camera_end.y - camera_start.y) * t,
+            camera_start.z + (camera_end.z - camera_start.z) * t
+        };
+
+        if (camera_point.z <= cam.near_plane + 1e-4f) {
+            return false;
+        }
+        if (camera_point.z >= cam.far_plane) {
+            continue;
+        }
+
+        const SDL_FPoint projected = project_camera_point_to_screen(camera_point, cam, width, height);
+        if (projected.x < 0.0f || projected.x >= static_cast<float>(width)
+            || projected.y < 0.0f || projected.y >= static_cast<float>(height)) {
+            return false;
+        }
+
+        const float occluder_depth = depth->sample(projected.x, projected.y);
+        if (!(occluder_depth + depth_bias < camera_point.z)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 overlay_output build_overlay_output(overlay_input input) {
     overlay_output output{};
     output.mode = input.mode;
@@ -453,6 +627,10 @@ overlay_output build_overlay_output(overlay_input input) {
     if (input.mode == debug_display_mode::off) {
         return output;
     }
+
+    depth_buffer depth = build_depth_buffer(input);
+    const depth_buffer* depth_ptr = depth.valid() ? &depth : nullptr;
+    constexpr float overlay_depth_bias = 0.05f;
 
     if (input.mode == debug_display_mode::wireframe) {
         const SDL_Color wire_color = input.terrain == terrain_mode::classic
@@ -482,6 +660,8 @@ overlay_output build_overlay_output(overlay_input input) {
         struct wire_edge_value {
             SDL_FPoint a{};
             SDL_FPoint b{};
+            float3 camera_a{};
+            float3 camera_b{};
             std::array<std::int32_t, 3> normal_key{};
             std::uint32_t count{0};
             bool coplanar_duplicate{false};
@@ -506,7 +686,8 @@ overlay_output build_overlay_output(overlay_input input) {
             };
         };
 
-        const auto add_greedy_edge = [&](const SDL_FPoint& start, const SDL_FPoint& end, const float3& normal) {
+        const auto add_greedy_edge = [&](const SDL_FPoint& start, const SDL_FPoint& end,
+            const float3& normal, const float3& camera_start, const float3& camera_end) {
             auto quant_a = quantize_point(start);
             auto quant_b = quantize_point(end);
             if (quant_a == quant_b) {
@@ -515,9 +696,12 @@ overlay_output build_overlay_output(overlay_input input) {
 
             SDL_FPoint ordered_start = start;
             SDL_FPoint ordered_end = end;
+            float3 ordered_camera_start = camera_start;
+            float3 ordered_camera_end = camera_end;
             if (quant_a[0] > quant_b[0] || (quant_a[0] == quant_b[0] && quant_a[1] > quant_b[1])) {
                 std::swap(quant_a, quant_b);
                 std::swap(ordered_start, ordered_end);
+                std::swap(ordered_camera_start, ordered_camera_end);
             }
 
             const wire_edge_key key{quant_a, quant_b};
@@ -526,6 +710,8 @@ overlay_output build_overlay_output(overlay_input input) {
             if (entry.count == 0) {
                 entry.a = ordered_start;
                 entry.b = ordered_end;
+                entry.camera_a = ordered_camera_start;
+                entry.camera_b = ordered_camera_end;
                 entry.normal_key = normal_key;
             } else if (entry.normal_key == normal_key) {
                 entry.coplanar_duplicate = true;
@@ -537,20 +723,36 @@ overlay_output build_overlay_output(overlay_input input) {
             const SDL_FPoint& a = tri.vertices[0].position;
             const SDL_FPoint& b = tri.vertices[1].position;
             const SDL_FPoint& c = tri.vertices[2].position;
+            const float3& camera_a = tri.camera_vertices[0];
+            const float3& camera_b = tri.camera_vertices[1];
+            const float3& camera_c = tri.camera_vertices[2];
             if (tri.mesher == mesher_choice::greedy) {
-                add_greedy_edge(a, b, tri.normal);
-                add_greedy_edge(b, c, tri.normal);
-                add_greedy_edge(c, a, tri.normal);
+                add_greedy_edge(a, b, tri.normal, camera_a, camera_b);
+                add_greedy_edge(b, c, tri.normal, camera_b, camera_c);
+                add_greedy_edge(c, a, tri.normal, camera_c, camera_a);
             } else {
-                group.segments.push_back(overlay_line_segment{a, b});
-                group.segments.push_back(overlay_line_segment{b, c});
-                group.segments.push_back(overlay_line_segment{c, a});
+                if (!segment_fully_occluded(camera_a, camera_b, a, b, input.cam,
+                        input.output_width, input.output_height, depth_ptr, overlay_depth_bias)) {
+                    group.segments.push_back(overlay_line_segment{a, b});
+                }
+                if (!segment_fully_occluded(camera_b, camera_c, b, c, input.cam,
+                        input.output_width, input.output_height, depth_ptr, overlay_depth_bias)) {
+                    group.segments.push_back(overlay_line_segment{b, c});
+                }
+                if (!segment_fully_occluded(camera_c, camera_a, c, a, input.cam,
+                        input.output_width, input.output_height, depth_ptr, overlay_depth_bias)) {
+                    group.segments.push_back(overlay_line_segment{c, a});
+                }
             }
         }
 
         for (const auto& [key, edge] : greedy_edges) {
             (void)key;
             if (edge.coplanar_duplicate) {
+                continue;
+            }
+            if (segment_fully_occluded(edge.camera_a, edge.camera_b, edge.a, edge.b, input.cam,
+                    input.output_width, input.output_height, depth_ptr, overlay_depth_bias)) {
                 continue;
             }
             group.segments.push_back(overlay_line_segment{edge.a, edge.b});
@@ -595,8 +797,11 @@ overlay_output build_overlay_output(overlay_input input) {
 
         std::array<SDL_FPoint, corners.size()> projected_points{};
         std::array<bool, corners.size()> visibility{};
+        std::array<float3, corners.size()> camera_points{};
 
         for (std::size_t i = 0; i < corners.size(); ++i) {
+            const clip_vertex corner_clip = make_clip_vertex(corners[i], SDL_FColor{}, input.cam, input.vectors);
+            camera_points[i] = float3{corner_clip.x, corner_clip.y, corner_clip.z};
             const projection_result projected = project_perspective(corners[i], input.cam, input.vectors,
                 input.output_width, input.output_height);
             visibility[i] = projected.visible;
@@ -605,6 +810,11 @@ overlay_output build_overlay_output(overlay_input input) {
 
         for (const auto& edge : box_edges) {
             if (!visibility[edge.first] || !visibility[edge.second]) {
+                continue;
+            }
+            if (segment_fully_occluded(camera_points[edge.first], camera_points[edge.second],
+                    projected_points[edge.first], projected_points[edge.second], input.cam,
+                    input.output_width, input.output_height, depth_ptr, overlay_depth_bias)) {
                 continue;
             }
             group.segments.push_back(overlay_line_segment{projected_points[edge.first], projected_points[edge.second]});
@@ -2012,6 +2222,9 @@ int main(int argc, char** argv) {
                     tri.vertices[0] = make_projected_vertex(v0, cam, output_width, output_height);
                     tri.vertices[1] = make_projected_vertex(v1, cam, output_width, output_height);
                     tri.vertices[2] = make_projected_vertex(v2, cam, output_width, output_height);
+                    tri.camera_vertices[0] = float3{v0.x, v0.y, v0.z};
+                    tri.camera_vertices[1] = float3{v1.x, v1.y, v1.z};
+                    tri.camera_vertices[2] = float3{v2.x, v2.y, v2.z};
                     tri.depth = std::min({v0.z, v1.z, v2.z});
                     tri.region = key.region;
                     tri.lod = key.lod;
