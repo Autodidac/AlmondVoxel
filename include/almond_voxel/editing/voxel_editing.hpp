@@ -1,10 +1,12 @@
 #pragma once
 
 #include "almond_voxel/chunk.hpp"
+#include "almond_voxel/effects/particle_emitter.hpp"
 #include "almond_voxel/world.hpp"
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <utility>
 
 namespace almond::voxel::editing {
@@ -64,6 +66,37 @@ inline bool clear_voxel(chunk_storage& chunk, const std::array<std::uint32_t, 3>
     return set_voxel(chunk, local, voxel_id{});
 }
 
+inline bool set_effect_density(chunk_storage& chunk, const std::array<std::uint32_t, 3>& local, float value) {
+    chunk.enable_effect_channels(effects::channel::density);
+    auto density = chunk.effect_density();
+    if (!density.contains(local[0], local[1], local[2])) {
+        return false;
+    }
+    density(local[0], local[1], local[2]) = value;
+    return true;
+}
+
+inline bool set_effect_velocity(chunk_storage& chunk, const std::array<std::uint32_t, 3>& local,
+    const effects::velocity_sample& value) {
+    chunk.enable_effect_channels(effects::channel::velocity);
+    auto velocity = chunk.effect_velocity();
+    if (!velocity.contains(local[0], local[1], local[2])) {
+        return false;
+    }
+    velocity(local[0], local[1], local[2]) = value;
+    return true;
+}
+
+inline bool set_effect_lifetime(chunk_storage& chunk, const std::array<std::uint32_t, 3>& local, float value) {
+    chunk.enable_effect_channels(effects::channel::lifetime);
+    auto lifetime = chunk.effect_lifetime();
+    if (!lifetime.contains(local[0], local[1], local[2])) {
+        return false;
+    }
+    lifetime(local[0], local[1], local[2]) = value;
+    return true;
+}
+
 inline bool set_voxel(region_manager& regions, const world_position& position, voxel_id id) {
     const auto coords = split_world_position(position, regions.chunk_dimensions());
     auto& chunk = regions.assure(coords.region);
@@ -83,6 +116,26 @@ inline bool toggle_voxel(region_manager& regions, const world_position& position
     }
     voxel_id& value = vox(coords.local[0], coords.local[1], coords.local[2]);
     value = value == voxel_id{} ? on_value : voxel_id{};
+    return true;
+}
+
+inline bool paint_particle_emitter(region_manager& regions, const world_position& position,
+    const effects::particle_emitter_brush& brush, effects::decay_settings decay = {}) {
+    const auto coords = split_world_position(position, regions.chunk_dimensions());
+    auto& chunk = regions.assure(coords.region);
+    chunk.enable_effect_channels(effects::channel::density | effects::channel::velocity | effects::channel::lifetime);
+    if (!effects::stamp_emitter(chunk, coords.local, brush)) {
+        return false;
+    }
+
+    auto manager = &regions;
+    auto recurring = std::make_shared<region_manager::task_type>();
+    *recurring = [manager, decay, recurring](chunk_storage& chunk_ref, const region_key& key) {
+        if (effects::simulate_decay(chunk_ref, decay)) {
+            manager->enqueue_task(key, *recurring);
+        }
+    };
+    manager->enqueue_task(coords.region, *recurring);
     return true;
 }
 

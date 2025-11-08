@@ -18,7 +18,7 @@
 
 namespace almond::voxel::serialization {
 
-constexpr std::uint32_t chunk_version_latest = 2;
+constexpr std::uint32_t chunk_version_latest = 3;
 constexpr std::array<char, 4> chunk_magic{'A', 'V', 'C', 'K'};
 
 struct chunk_header_v1 {
@@ -37,7 +37,10 @@ struct chunk_header_v2 {
 enum chunk_channel_flags : std::uint32_t {
     chunk_channel_materials = 1u << 0u,
     chunk_channel_skylight_cache = 1u << 1u,
-    chunk_channel_blocklight_cache = 1u << 2u
+    chunk_channel_blocklight_cache = 1u << 2u,
+    chunk_channel_effect_density = 1u << 3u,
+    chunk_channel_effect_velocity = 1u << 4u,
+    chunk_channel_effect_lifetime = 1u << 5u
 };
 
 struct region_blob {
@@ -58,6 +61,9 @@ inline std::vector<std::byte> serialize_chunk(const chunk_storage& chunk) {
     const auto meta_data = chunk.metadata();
     const bool has_materials = chunk.materials_enabled();
     const bool has_high_precision = chunk.high_precision_lighting_enabled();
+    const bool has_effect_density = chunk.effect_density_enabled();
+    const bool has_effect_velocity = chunk.effect_velocity_enabled();
+    const bool has_effect_lifetime = chunk.effect_lifetime_enabled();
 
     chunk_header_v2 header{};
     header.extent[0] = extent.x;
@@ -69,6 +75,15 @@ inline std::vector<std::byte> serialize_chunk(const chunk_storage& chunk) {
     if (has_high_precision) {
         header.channel_flags |= chunk_channel_skylight_cache | chunk_channel_blocklight_cache;
     }
+    if (has_effect_density) {
+        header.channel_flags |= chunk_channel_effect_density;
+    }
+    if (has_effect_velocity) {
+        header.channel_flags |= chunk_channel_effect_velocity;
+    }
+    if (has_effect_lifetime) {
+        header.channel_flags |= chunk_channel_effect_lifetime;
+    }
 
     const auto volume = extent.volume();
     std::size_t payload_bytes = volume * (sizeof(voxel_id) + 3);
@@ -77,6 +92,15 @@ inline std::vector<std::byte> serialize_chunk(const chunk_storage& chunk) {
     }
     if (has_high_precision) {
         payload_bytes += volume * sizeof(float) * 2;
+    }
+    if (has_effect_density) {
+        payload_bytes += volume * sizeof(float);
+    }
+    if (has_effect_velocity) {
+        payload_bytes += volume * sizeof(effects::velocity_sample);
+    }
+    if (has_effect_lifetime) {
+        payload_bytes += volume * sizeof(float);
     }
 
     std::vector<std::byte> buffer;
@@ -99,6 +123,15 @@ inline std::vector<std::byte> serialize_chunk(const chunk_storage& chunk) {
     if (has_high_precision) {
         copy_span(chunk.skylight_cache().linear());
         copy_span(chunk.blocklight_cache().linear());
+    }
+    if (has_effect_density) {
+        copy_span(chunk.effect_density().linear());
+    }
+    if (has_effect_velocity) {
+        copy_span(chunk.effect_velocity().linear());
+    }
+    if (has_effect_lifetime) {
+        copy_span(chunk.effect_lifetime().linear());
     }
 
     return buffer;
@@ -157,6 +190,9 @@ inline chunk_storage deserialize_chunk(std::span<const std::byte> bytes) {
     const bool has_materials = (header_v2.channel_flags & chunk_channel_materials) != 0;
     const bool has_sky_cache = (header_v2.channel_flags & chunk_channel_skylight_cache) != 0;
     const bool has_block_cache = (header_v2.channel_flags & chunk_channel_blocklight_cache) != 0;
+    const bool has_effect_density = (header_v2.channel_flags & chunk_channel_effect_density) != 0;
+    const bool has_effect_velocity = (header_v2.channel_flags & chunk_channel_effect_velocity) != 0;
+    const bool has_effect_lifetime = (header_v2.channel_flags & chunk_channel_effect_lifetime) != 0;
 
     std::size_t required = sizeof(chunk_header_v2) + count * (sizeof(voxel_id) + 3);
     if (has_materials) {
@@ -168,6 +204,15 @@ inline chunk_storage deserialize_chunk(std::span<const std::byte> bytes) {
     if (has_block_cache) {
         required += count * sizeof(float);
     }
+    if (has_effect_density) {
+        required += count * sizeof(float);
+    }
+    if (has_effect_velocity) {
+        required += count * sizeof(effects::velocity_sample);
+    }
+    if (has_effect_lifetime) {
+        required += count * sizeof(float);
+    }
     if (bytes.size() < required) {
         throw std::runtime_error("chunk payload truncated");
     }
@@ -176,6 +221,16 @@ inline chunk_storage deserialize_chunk(std::span<const std::byte> bytes) {
     config.extent = extent;
     config.enable_materials = has_materials;
     config.enable_high_precision_lighting = has_sky_cache || has_block_cache;
+    config.effect_channels = effects::channel::none;
+    if (has_effect_density) {
+        config.effect_channels |= effects::channel::density;
+    }
+    if (has_effect_velocity) {
+        config.effect_channels |= effects::channel::velocity;
+    }
+    if (has_effect_lifetime) {
+        config.effect_channels |= effects::channel::lifetime;
+    }
 
     chunk_storage chunk{config};
     const auto* ptr = bytes.data() + sizeof(chunk_header_v2);
@@ -208,6 +263,22 @@ inline chunk_storage deserialize_chunk(std::span<const std::byte> bytes) {
             std::memcpy(block_cache.linear().data(), ptr, count * sizeof(float));
             ptr += count * sizeof(float);
         }
+    }
+
+    if (has_effect_density) {
+        auto density = chunk.effect_density();
+        std::memcpy(density.linear().data(), ptr, count * sizeof(float));
+        ptr += count * sizeof(float);
+    }
+    if (has_effect_velocity) {
+        auto velocity = chunk.effect_velocity();
+        std::memcpy(velocity.linear().data(), ptr, count * sizeof(effects::velocity_sample));
+        ptr += count * sizeof(effects::velocity_sample);
+    }
+    if (has_effect_lifetime) {
+        auto lifetime = chunk.effect_lifetime();
+        std::memcpy(lifetime.linear().data(), ptr, count * sizeof(float));
+        ptr += count * sizeof(float);
     }
 
     chunk.mark_dirty(false);
@@ -281,6 +352,15 @@ inline chunk_storage deserialize_chunk_from_stream(std::istream& in) {
         payload_bytes += count * sizeof(float);
     }
     if (flags & chunk_channel_blocklight_cache) {
+        payload_bytes += count * sizeof(float);
+    }
+    if (flags & chunk_channel_effect_density) {
+        payload_bytes += count * sizeof(float);
+    }
+    if (flags & chunk_channel_effect_velocity) {
+        payload_bytes += count * sizeof(effects::velocity_sample);
+    }
+    if (flags & chunk_channel_effect_lifetime) {
         payload_bytes += count * sizeof(float);
     }
 
