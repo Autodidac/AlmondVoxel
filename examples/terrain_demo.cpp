@@ -113,18 +113,18 @@ SDL_FColor shade_color(voxel_id id, const std::array<float, 3>& normal_values,
 
     SDL_FColor base{};
     if (mode == mesher_choice::marching && terrain != terrain_mode::classic) {
-        base = SDL_FColor{210.0f / 255.0f, 210.0f / 255.0f, 210.0f / 255.0f, 1.0f};
+        base = SDL_FColor{0.65f, 0.80f, 1.0f, 1.0f}; // light sky blue
     } else {
         if (id == voxel_id{}) {
-            base = SDL_FColor{200.0f / 255.0f, 200.0f / 255.0f, 200.0f / 255.0f, 1.0f};
+            base = SDL_FColor{0.55f, 0.70f, 0.95f, 1.0f}; // light blue
         } else if (id == voxel_id{4}) {
-            base = SDL_FColor{75.0f / 255.0f, 75.0f / 255.0f, 80.0f / 255.0f, 1.0f};
+            base = SDL_FColor{0.15f, 0.25f, 0.45f, 1.0f}; // dark navy
         } else if (id == voxel_id{3}) {
-            base = SDL_FColor{120.0f / 255.0f, 82.0f / 255.0f, 45.0f / 255.0f, 1.0f};
+            base = SDL_FColor{0.47f, 0.35f, 0.22f, 1.0f}; // unchanged brown (still dirt)
         } else if (id == voxel_id{2}) {
-            base = SDL_FColor{96.0f / 255.0f, 168.0f / 255.0f, 92.0f / 255.0f, 1.0f};
+            base = SDL_FColor{0.38f, 0.66f, 0.36f, 1.0f}; // grass green
         } else {
-            base = SDL_FColor{90.0f / 255.0f, 170.0f / 255.0f, 90.0f / 255.0f, 1.0f};
+            base = SDL_FColor{0.35f, 0.67f, 0.35f, 1.0f}; // soft green
         }
     }
 
