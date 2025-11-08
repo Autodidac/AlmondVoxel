@@ -1843,9 +1843,24 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
         std::vector<chunk_candidate> chunk_candidates;
         chunk_candidates.reserve(static_cast<std::size_t>(diameter) * static_cast<std::size_t>(diameter));
 
-        for (int dy = -radius; dy <= radius; ++dy) {
-            for (int dx = -radius; dx <= radius; ++dx) {
-                region_key region{base_x + dx, base_y + dy, 0};
+        int spiral_x = 0;
+        int spiral_y = 0;
+        int direction_x = 0;
+        int direction_y = -1;
+
+        const auto within_radius = [radius](int x, int y) {
+            return x >= -radius && x <= radius && y >= -radius && y <= radius;
+        };
+
+        const auto rotate_direction = [](int& dx, int& dy) {
+            const int temp = dx;
+            dx = -dy;
+            dy = temp;
+        };
+
+        for (int i = 0; i < diameter * diameter; ++i) {
+            if (within_radius(spiral_x, spiral_y)) {
+                region_key region{base_x + spiral_x, base_y + spiral_y, 0};
                 const std::array<std::int64_t, 3> origin{
                     static_cast<std::int64_t>(region.x) * static_cast<std::int64_t>(extent.x) * lod.cell_size,
                     static_cast<std::int64_t>(region.y) * static_cast<std::int64_t>(extent.y) * lod.cell_size,
@@ -1858,35 +1873,19 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
                 const double dy_world = center_y - static_cast<double>(cam.position.y);
                 const double distance = std::sqrt(dx_world * dx_world + dy_world * dy_world);
 
-                if (distance < scaled_min_distance || distance > scaled_max_distance) {
-                    continue;
+                if (distance >= scaled_min_distance && distance <= scaled_max_distance) {
+                    chunk_candidates.push_back(chunk_candidate{region, origin, distance});
                 }
-
-                chunk_candidates.push_back(chunk_candidate{region, origin, distance});
             }
+
+            if (spiral_x == spiral_y || (spiral_x < 0 && spiral_x == -spiral_y)
+                || (spiral_x > 0 && spiral_x == 1 - spiral_y)) {
+                rotate_direction(direction_x, direction_y);
+            }
+
+            spiral_x += direction_x;
+            spiral_y += direction_y;
         }
-
-        std::sort(chunk_candidates.begin(), chunk_candidates.end(), [](const chunk_candidate& lhs, const chunk_candidate& rhs) {
-            if (lhs.distance < rhs.distance) {
-                return true;
-            }
-            if (rhs.distance < lhs.distance) {
-                return false;
-            }
-            if (lhs.region.y < rhs.region.y) {
-                return true;
-            }
-            if (rhs.region.y < lhs.region.y) {
-                return false;
-            }
-            if (lhs.region.x < rhs.region.x) {
-                return true;
-            }
-            if (rhs.region.x < lhs.region.x) {
-                return false;
-            }
-            return lhs.region.z < rhs.region.z;
-        });
 
         for (const auto& candidate : chunk_candidates) {
             const chunk_instance_key key{candidate.region, lod.level};
