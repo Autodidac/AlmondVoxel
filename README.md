@@ -73,14 +73,14 @@ graph TD
 ### Runtime data flow
 ```mermaid
 flowchart LR
-    Loader[loader_type callbacks\n(region_manager::set_loader)] --> RM[region_manager]
-    Saver[saver_type callbacks\n(region_manager::set_saver)] --> RM
-    Tasks[task_queue_\n(region_manager::enqueue_task)] --> RM
-    RM -->|assure()/find()| Chunks[chunk_storage instances]
+    Loader["loader_type callbacks\n(region_manager::set_loader)"] --> RM[region_manager]
+    Saver["saver_type callbacks\n(region_manager::set_saver)"] --> RM
+    Tasks["task_queue_\n(region_manager::enqueue_task)"] --> RM
+    RM -->|assure()/find()| Chunks["chunk_storage instances"]
     Chunks -->|dirty() flag| RM
-    RM -->|snapshot_loaded()| Meshing[meshing::greedy_mesh / marching_cubes]
+    RM -->|snapshot_loaded()| Meshing["meshing::greedy_mesh / marching_cubes"]
     Meshing --> Buffers[meshing::mesh_buffer]
-    Buffers --> Demos[terrain_demo & examples]
+    Buffers --> Demos["terrain_demo & examples"]
     RM -->|saver() on evict| Saver
 ```
 
