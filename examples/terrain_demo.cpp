@@ -83,6 +83,10 @@ constexpr debug_display_mode cycle_debug_mode(debug_display_mode mode,
     return debug_display_mode::off;
 }
 
+constexpr std::int32_t bedrock_layer_count = 4;
+constexpr std::int32_t sunlight_clearance_blocks = 3;
+constexpr std::int32_t sunlight_scan_height = 64;
+
 constexpr bool collision_uses_heightfield(terrain_mode terrain, mesher_choice mesher) {
     if (terrain == terrain_mode::classic) {
         return true;
@@ -421,6 +425,7 @@ struct terrain_sampler {
         cfg.surface_voxel = voxel_id{2};
         cfg.subsurface_voxel = voxel_id{3};
         cfg.bedrock_voxel = voxel_id{4};
+        cfg.bedrock_layers = static_cast<std::uint32_t>(bedrock_layer_count);
         return cfg;
     }
 
@@ -437,6 +442,9 @@ struct terrain_sampler {
     }
 
     [[nodiscard]] voxel_id classify(double sample_z, double height, std::int64_t world_z) const {
+        if (world_z < static_cast<std::int64_t>(classic_cfg.bedrock_layers)) {
+            return classic_cfg.bedrock_voxel;
+        }
         if (mode == terrain_mode::classic) {
             const auto& cfg = classic_cfg;
             if (sample_z <= height) {
@@ -448,9 +456,6 @@ struct terrain_sampler {
                     return cfg.surface_voxel;
                 }
                 return cfg.subsurface_voxel;
-            }
-            if (world_z <= 0) {
-                return cfg.bedrock_voxel;
             }
             return voxel_id{};
         }
@@ -568,6 +573,80 @@ struct voxel_edit_state {
     return false;
 }
 
+[[nodiscard]] std::optional<float3> find_sunlit_recovery_position(const float3& desired_center,
+    const float3& half_extents, const terrain_sampler& sampler, const voxel_edit_state* edits,
+    mesher_choice mode) {
+    const bool use_heightfield = collision_uses_heightfield(sampler.mode, mode);
+    const float min_x = desired_center.x - half_extents.x;
+    const float max_x = desired_center.x + half_extents.x;
+    const float min_y = desired_center.y - half_extents.y;
+    const float max_y = desired_center.y + half_extents.y;
+    const std::int64_t block_min_x = static_cast<std::int64_t>(std::floor(min_x));
+    const std::int64_t block_max_x = static_cast<std::int64_t>(std::floor(max_x));
+    const std::int64_t block_min_y = static_cast<std::int64_t>(std::floor(min_y));
+    const std::int64_t block_max_y = static_cast<std::int64_t>(std::floor(max_y));
+
+    const double terrain_height = sampler.height_at(desired_center.x, desired_center.y);
+    std::int64_t base_search_z = static_cast<std::int64_t>(std::floor(terrain_height)) + 1;
+    base_search_z = std::max<std::int64_t>(base_search_z, static_cast<std::int64_t>(bedrock_layer_count));
+    const std::int64_t search_end = base_search_z + sunlight_scan_height;
+
+    for (std::int64_t base_z = base_search_z; base_z < search_end; ++base_z) {
+        bool has_clearance = true;
+        for (std::int64_t dz = 0; dz < static_cast<std::int64_t>(sunlight_clearance_blocks); ++dz) {
+            const std::int64_t z = base_z + dz;
+            for (std::int64_t y = block_min_y; y <= block_max_y; ++y) {
+                for (std::int64_t x = block_min_x; x <= block_max_x; ++x) {
+                    if (voxel_is_solid(sampler, edits, x, y, z, use_heightfield)) {
+                        has_clearance = false;
+                        break;
+                    }
+                }
+                if (!has_clearance) {
+                    break;
+                }
+            }
+            if (!has_clearance) {
+                break;
+            }
+        }
+
+        if (!has_clearance) {
+            continue;
+        }
+
+        bool receives_sunlight = true;
+        for (std::int64_t z = base_z + sunlight_clearance_blocks; z < search_end; ++z) {
+            for (std::int64_t y = block_min_y; y <= block_max_y; ++y) {
+                for (std::int64_t x = block_min_x; x <= block_max_x; ++x) {
+                    if (voxel_is_solid(sampler, edits, x, y, z, use_heightfield)) {
+                        receives_sunlight = false;
+                        break;
+                    }
+                }
+                if (!receives_sunlight) {
+                    break;
+                }
+            }
+            if (!receives_sunlight) {
+                break;
+            }
+        }
+
+        if (!receives_sunlight) {
+            continue;
+        }
+
+        float3 candidate{desired_center.x, desired_center.y,
+            static_cast<float>(base_z) + half_extents.z};
+        if (!box_intersects_voxels(candidate, half_extents, sampler, edits, use_heightfield)) {
+            return candidate;
+        }
+    }
+
+    return std::nullopt;
+}
+
 void move_player_axis(float3& position, float& velocity_component, float delta, int axis,
     const float3& half_extents, const terrain_sampler& sampler, const voxel_edit_state* edits,
     mesher_choice mode, bool& on_ground) {
@@ -595,77 +674,39 @@ void move_player_axis(float3& position, float& velocity_component, float delta, 
         return;
     }
 
-    if (use_heightfield) {
-        float3 last_safe = start;
-        float t_low = 0.0f;
-        float t_high = 1.0f;
-        for (int i = 0; i < 12; ++i) {
-            const float t_mid = 0.5f * (t_low + t_high);
-            const float3 candidate = add(start, scale(offset, t_mid));
-            if (intersects(candidate)) {
-                t_high = t_mid;
-            } else {
-                last_safe = candidate;
-                t_low = t_mid;
-            }
-        }
-        position = last_safe;
-
-        constexpr float epsilon = 0.001f;
-        float3 separation{};
-        if (axis == 0) {
-            separation.x = (delta > 0.0f) ? -epsilon : epsilon;
-        } else if (axis == 1) {
-            separation.y = (delta > 0.0f) ? -epsilon : epsilon;
+    float3 last_safe = start;
+    float t_low = 0.0f;
+    float t_high = 1.0f;
+    for (int i = 0; i < 12; ++i) {
+        const float t_mid = 0.5f * (t_low + t_high);
+        const float3 candidate = add(start, scale(offset, t_mid));
+        if (intersects(candidate)) {
+            t_high = t_mid;
         } else {
-            separation.z = (delta > 0.0f) ? -epsilon : epsilon;
+            last_safe = candidate;
+            t_low = t_mid;
         }
-        position = add(position, separation);
-        if (intersects(position)) {
-            position = last_safe;
-        }
-
-        if (axis == 2 && delta < 0.0f) {
-            on_ground = true;
-        }
-        velocity_component = 0.0f;
-        return;
     }
+    position = last_safe;
 
     constexpr float epsilon = 0.001f;
+    float3 separation{};
     if (axis == 0) {
-        if (delta > 0.0f) {
-            const float max_coord = position.x + half_extents.x;
-            const std::int64_t block = static_cast<std::int64_t>(std::floor(max_coord));
-            position.x = static_cast<float>(block) - half_extents.x - epsilon;
-        } else {
-            const float min_coord = position.x - half_extents.x;
-            const std::int64_t block = static_cast<std::int64_t>(std::floor(min_coord));
-            position.x = static_cast<float>(block + 1) + half_extents.x + epsilon;
-        }
+        separation.x = (delta > 0.0f) ? -epsilon : epsilon;
     } else if (axis == 1) {
-        if (delta > 0.0f) {
-            const float max_coord = position.y + half_extents.y;
-            const std::int64_t block = static_cast<std::int64_t>(std::floor(max_coord));
-            position.y = static_cast<float>(block) - half_extents.y - epsilon;
-        } else {
-            const float min_coord = position.y - half_extents.y;
-            const std::int64_t block = static_cast<std::int64_t>(std::floor(min_coord));
-            position.y = static_cast<float>(block + 1) + half_extents.y + epsilon;
-        }
+        separation.y = (delta > 0.0f) ? -epsilon : epsilon;
     } else {
-        if (delta > 0.0f) {
-            const float max_coord = position.z + half_extents.z;
-            const std::int64_t block = static_cast<std::int64_t>(std::floor(max_coord));
-            position.z = static_cast<float>(block) - half_extents.z - epsilon;
-        } else {
-            const float min_coord = position.z - half_extents.z;
-            const std::int64_t block = static_cast<std::int64_t>(std::floor(min_coord));
-            position.z = static_cast<float>(block + 1) + half_extents.z + epsilon;
-            on_ground = true;
-        }
+        separation.z = (delta > 0.0f) ? -epsilon : epsilon;
     }
 
+    const float3 adjusted = add(position, separation);
+    if (!intersects(adjusted)) {
+        position = adjusted;
+    }
+
+    if (axis == 2 && delta < 0.0f) {
+        on_ground = true;
+    }
     velocity_component = 0.0f;
 }
 
@@ -1598,6 +1639,22 @@ int main(int argc, char** argv) {
 
         if (player.on_ground) {
             player.velocity.z = 0.0f;
+        }
+
+        const float player_bottom = player.position.z - current_half_extents.z;
+        const float teleport_threshold = -static_cast<float>(bedrock_layer_count) - 1.0f;
+        if (player_bottom < teleport_threshold) {
+            std::optional<float3> recovery_position;
+            {
+                std::shared_lock<std::shared_mutex> lock{voxel_edits->mutex};
+                recovery_position = find_sunlit_recovery_position(player.position, current_half_extents,
+                    *sampler, voxel_edits.get(), mesher_mode);
+            }
+            if (recovery_position.has_value()) {
+                player.position = *recovery_position;
+                player.velocity = float3{};
+                player.on_ground = false;
+            }
         }
 
         sync_camera();
