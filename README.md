@@ -152,7 +152,7 @@ The repository provides runnable targets that exercise different parts of the li
 
 | Target | Description |
 | --- | --- |
-| `terrain_demo` | SDL3-powered viewport that streams regions, applies editing brushes, and renders greedy meshes. |
+| `terrain_demo` | SDL3-powered viewport that streams regions, applies editing brushes, and renders naive/greedy cubes or marching-cubes surfaces. |
 | `classic_heightfield_example` | Console sample that generates a simple height map and prints summary metrics. |
 | `cubic_naive_mesher_example` | Emits all visible cube faces without merging to showcase the baseline meshing path. |
 | `greedy_mesher_example` | Demonstrates greedy mesh extraction for a procedurally generated chunk. |
@@ -165,6 +165,7 @@ Use `run.sh` to search common build directories and launch a binary:
 ./run.sh cubic_naive_mesher_example
 ./run.sh greedy_mesher_example
 ```
+Pass additional arguments after `--` to configure the SDL demo, for example `./run.sh terrain_demo -- --mesher=naive` to start with the naive cubic mesher.
 On Windows PowerShell, invoke the script through `bash` (included with Git for Windows):
 ```powershell
 bash ./run.sh terrain_demo

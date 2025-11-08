@@ -3,6 +3,9 @@
 All notable changes to AlmondVoxel are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- Integrated the naive cubic mesher option into `terrain_demo`, making it available alongside the greedy and marching paths.
+
 ### Changed
 - Refreshed documentation to match the current demos, tests, and cross-platform build scripts.
 - Clarified maintenance expectations and removed legacy contribution guidance.

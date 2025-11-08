@@ -65,6 +65,7 @@ bash ./run.sh terrain_demo
 bash ./run.sh almond_voxel_tests
 bash ./run.sh mesh_bench
 ```
+Append additional arguments after `--` when launching through `run.sh`, for example `bash ./run.sh terrain_demo -- --mesher=naive` to showcase the naive cubic mesher.
 
 Alternatively, run binaries directly from the build output folder:
 ```powershell

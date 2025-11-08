@@ -1,5 +1,6 @@
 #include "almond_voxel/world.hpp"
 #include "almond_voxel/meshing/greedy_mesher.hpp"
+#include "almond_voxel/meshing/naive_mesher.hpp"
 #include "almond_voxel/meshing/marching_cubes.hpp"
 #include "almond_voxel/terrain/classic.hpp"
 
@@ -38,6 +39,7 @@ namespace {
 using namespace almond::voxel;
 
 enum class mesher_choice {
+    naive,
     greedy,
     marching
 };
@@ -104,6 +106,8 @@ constexpr bool collision_uses_heightfield(terrain_mode terrain, mesher_choice me
 
 constexpr std::string_view mesher_label(mesher_choice choice) {
     switch (choice) {
+    case mesher_choice::naive:
+        return "naive mesher";
     case mesher_choice::greedy:
         return "greedy mesher";
     case mesher_choice::marching:
@@ -905,7 +909,7 @@ overlay_output build_overlay_output(overlay_input input) {
             const float3& world_a = tri.world_vertices[0];
             const float3& world_b = tri.world_vertices[1];
             const float3& world_c = tri.world_vertices[2];
-            if (tri.mesher == mesher_choice::greedy) {
+            if (tri.mesher == mesher_choice::greedy || tri.mesher == mesher_choice::naive) {
                 add_greedy_edge(a, b, tri.normal, camera_a, camera_b, world_a, world_b);
                 add_greedy_edge(b, c, tri.normal, camera_b, camera_c, world_b, world_c);
                 add_greedy_edge(c, a, tri.normal, camera_c, camera_a, world_c, world_a);
@@ -1644,7 +1648,11 @@ chunk_mesh_entry build_chunk_mesh(
             }
             return cell_is_solid(origin, cell_size, coord, sampler, edits);
         };
-        entry.mesh = meshing::greedy_mesh_with_neighbors(chunk, is_opaque, neighbor_sampler);
+        if (mode == mesher_choice::naive) {
+            entry.mesh = meshing::naive_mesh_with_neighbors(chunk, is_opaque, neighbor_sampler);
+        } else {
+            entry.mesh = meshing::greedy_mesh_with_neighbors(chunk, is_opaque, neighbor_sampler);
+        }
     }
     entry.origin = origin;
     entry.cell_size = cell_size;
@@ -2048,6 +2056,8 @@ int main(int argc, char** argv) {
         std::string_view arg{argv[i]};
         if (arg == "--marching-cubes" || arg == "--mesher=marching") {
             mesher_mode = mesher_choice::marching;
+        } else if (arg == "--mesher=naive") {
+            mesher_mode = mesher_choice::naive;
         } else if (arg == "--mesher=greedy") {
             mesher_mode = mesher_choice::greedy;
         } else if (arg == "--terrain=classic" || arg == "--classic-terrain") {
@@ -2058,6 +2068,7 @@ int main(int argc, char** argv) {
     }
 
     std::vector<demo_mode_entry> demo_modes{
+        demo_mode_entry{mesher_choice::naive, terrain_mode::smooth},
         demo_mode_entry{mesher_choice::greedy, terrain_mode::smooth},
         demo_mode_entry{mesher_choice::marching, terrain_mode::smooth},
         demo_mode_entry{mesher_choice::greedy, terrain_mode::classic},
@@ -2114,11 +2125,15 @@ int main(int argc, char** argv) {
     };
 
     std::cout << "Starting terrain demo with " << demo_mode_description(mesher_mode, terrain_setting)
-              << ". Press Alt+M to cycle demo presets (1) "
-              << demo_mode_label(demo_modes[0].mesher, demo_modes[0].terrain) << ", (2) "
-              << demo_mode_label(demo_modes[1].mesher, demo_modes[1].terrain) << ", (3) "
-              << demo_mode_label(demo_modes[2].mesher, demo_modes[2].terrain)
-              << ". Left click removes voxels, right click places them."
+              << ". Press Alt+M to cycle demo presets";
+    for (std::size_t i = 0; i < demo_modes.size(); ++i) {
+        std::cout << " (" << (i + 1) << ") "
+                  << demo_mode_label(demo_modes[i].mesher, demo_modes[i].terrain);
+        if (i + 1 < demo_modes.size()) {
+            std::cout << ",";
+        }
+    }
+    std::cout << ". Left click removes voxels, right click places them."
               << " Press Space to jump and hold Shift to sprint. Use F3 to cycle debug overlays (wireframe, non-air, air-only).\n";
     std::cout << "Render distance starts at the minimum setting. Adjust it with '[' and ']' as performance allows.\n";
     std::cout << "Debug overlay distance can be tuned independently with '-' and '='.\n";
