@@ -103,7 +103,8 @@ float dot(float3 a, float3 b) {
     return quotient;
 }
 
-SDL_FColor shade_color(voxel_id id, const std::array<float, 3>& normal_values, mesher_choice mode) {
+SDL_FColor shade_color(voxel_id id, const std::array<float, 3>& normal_values,
+    mesher_choice mode, terrain_mode terrain) {
     const float3 normal = normalize(to_float3(normal_values));
     const float3 light = normalize(float3{0.6f, 0.9f, 0.5f});
     const float diffuse = std::max(dot(normal, light), 0.0f);
@@ -111,7 +112,7 @@ SDL_FColor shade_color(voxel_id id, const std::array<float, 3>& normal_values, m
     const float intensity = std::clamp(ambient + diffuse * 0.65f, 0.0f, 1.0f);
 
     SDL_FColor base{};
-    if (mode == mesher_choice::marching) {
+    if (mode == mesher_choice::marching && terrain != terrain_mode::classic) {
         base = SDL_FColor{210.0f / 255.0f, 210.0f / 255.0f, 210.0f / 255.0f, 1.0f};
     } else {
         if (id == voxel_id{}) {
@@ -369,6 +370,70 @@ struct voxel_edit_state {
     return sample_voxel_with_overrides(sampler, edits, world_x, world_y, world_z) != voxel_id{};
 }
 
+[[nodiscard]] std::optional<voxel_id> find_override(const voxel_edit_state* edits,
+    std::int64_t world_x, std::int64_t world_y, std::int64_t world_z) {
+    if (!edits) {
+        return std::nullopt;
+    }
+    voxel_coord key{world_x, world_y, world_z};
+    if (auto it = edits->overrides.find(key); it != edits->overrides.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] bool heightfield_cell_contains_solid(std::int64_t world_x, std::int64_t world_y,
+    std::int64_t world_z, const terrain_sampler& sampler) {
+    for (int dz = 0; dz <= 1; ++dz) {
+        const double sample_z = static_cast<double>(world_z + dz);
+        for (int dy = 0; dy <= 1; ++dy) {
+            const double sample_y = static_cast<double>(world_y + dy);
+            for (int dx = 0; dx <= 1; ++dx) {
+                const double sample_x = static_cast<double>(world_x + dx);
+                const double terrain_height = sampler.height_at(sample_x, sample_y);
+                if (sample_z <= terrain_height) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] bool box_intersects_heightfield(const float3& center, const float3& half_extents,
+    const terrain_sampler& sampler, const voxel_edit_state* edits) {
+    const float min_x = center.x - half_extents.x;
+    const float max_x = center.x + half_extents.x;
+    const float min_y = center.y - half_extents.y;
+    const float max_y = center.y + half_extents.y;
+    const float min_z = center.z - half_extents.z;
+    const float max_z = center.z + half_extents.z;
+
+    const std::int64_t block_min_x = static_cast<std::int64_t>(std::floor(min_x));
+    const std::int64_t block_max_x = static_cast<std::int64_t>(std::floor(max_x));
+    const std::int64_t block_min_y = static_cast<std::int64_t>(std::floor(min_y));
+    const std::int64_t block_max_y = static_cast<std::int64_t>(std::floor(max_y));
+    const std::int64_t block_min_z = static_cast<std::int64_t>(std::floor(min_z));
+    const std::int64_t block_max_z = static_cast<std::int64_t>(std::floor(max_z));
+
+    for (std::int64_t z = block_min_z; z <= block_max_z; ++z) {
+        for (std::int64_t y = block_min_y; y <= block_max_y; ++y) {
+            for (std::int64_t x = block_min_x; x <= block_max_x; ++x) {
+                if (auto override_id = find_override(edits, x, y, z)) {
+                    if (*override_id != voxel_id{}) {
+                        return true;
+                    }
+                    continue;
+                }
+                if (heightfield_cell_contains_solid(x, y, z, sampler)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] bool box_intersects_voxels(const float3& center, const float3& half_extents,
     const terrain_sampler& sampler, const voxel_edit_state* edits) {
     const float min_x = center.x - half_extents.x;
@@ -399,7 +464,7 @@ struct voxel_edit_state {
 
 void move_player_axis(float3& position, float& velocity_component, float delta, int axis,
     const float3& half_extents, const terrain_sampler& sampler, const voxel_edit_state* edits,
-    bool& on_ground) {
+    mesher_choice mode, bool& on_ground) {
     if (delta == 0.0f) {
         return;
     }
@@ -413,8 +478,55 @@ void move_player_axis(float3& position, float& velocity_component, float delta, 
         offset.z = delta;
     }
 
+    const auto intersects = [&](const float3& test_position) {
+        const bool use_heightfield = (mode == mesher_choice::marching) || (sampler.mode == terrain_mode::classic);
+        if (use_heightfield) {
+            return box_intersects_heightfield(test_position, half_extents, sampler, edits);
+        }
+        return box_intersects_voxels(test_position, half_extents, sampler, edits);
+    };
+
+    float3 start = position;
     position = add(position, offset);
-    if (!box_intersects_voxels(position, half_extents, sampler, edits)) {
+    if (!intersects(position)) {
+        return;
+    }
+
+    const bool use_heightfield = (mode == mesher_choice::marching) || (sampler.mode == terrain_mode::classic);
+    if (use_heightfield) {
+        float3 last_safe = start;
+        float t_low = 0.0f;
+        float t_high = 1.0f;
+        for (int i = 0; i < 12; ++i) {
+            const float t_mid = 0.5f * (t_low + t_high);
+            const float3 candidate = add(start, scale(offset, t_mid));
+            if (intersects(candidate)) {
+                t_high = t_mid;
+            } else {
+                last_safe = candidate;
+                t_low = t_mid;
+            }
+        }
+        position = last_safe;
+
+        constexpr float epsilon = 0.001f;
+        float3 separation{};
+        if (axis == 0) {
+            separation.x = (delta > 0.0f) ? -epsilon : epsilon;
+        } else if (axis == 1) {
+            separation.y = (delta > 0.0f) ? -epsilon : epsilon;
+        } else {
+            separation.z = (delta > 0.0f) ? -epsilon : epsilon;
+        }
+        position = add(position, separation);
+        if (intersects(position)) {
+            position = last_safe;
+        }
+
+        if (axis == 2 && delta < 0.0f) {
+            on_ground = true;
+        }
+        velocity_component = 0.0f;
         return;
     }
 
@@ -609,6 +721,78 @@ terrain_height_cache build_height_cache(const chunk_extent& extent, const std::a
     return cache;
 }
 
+meshing::mesh_result build_classic_height_mesh(const chunk_extent& extent,
+    const std::array<std::int64_t, 3>& origin, int cell_size,
+    const terrain_sampler& sampler, const terrain_height_cache& cache) {
+    const std::size_t vertex_width = static_cast<std::size_t>(extent.x) + 1;
+    const std::size_t vertex_height = static_cast<std::size_t>(extent.y) + 1;
+
+    meshing::mesh_result mesh{};
+    mesh.vertices.resize(vertex_width * vertex_height);
+
+    const auto vertex_index = [vertex_width](std::size_t x, std::size_t y) {
+        return y * vertex_width + x;
+    };
+
+    for (std::size_t y = 0; y < vertex_height; ++y) {
+        for (std::size_t x = 0; x < vertex_width; ++x) {
+            const std::size_t index = vertex_index(x, y);
+            meshing::vertex vert{};
+            vert.position = {
+                static_cast<float>(x),
+                static_cast<float>(y),
+                static_cast<float>(cache.vertex[index] - static_cast<double>(origin[2]))
+            };
+
+            const auto sample_height = [&](std::size_t sx, std::size_t sy) {
+                const std::size_t clamped_x = std::clamp<std::size_t>(sx, 0, vertex_width - 1);
+                const std::size_t clamped_y = std::clamp<std::size_t>(sy, 0, vertex_height - 1);
+                return cache.vertex[vertex_index(clamped_x, clamped_y)];
+            };
+
+            const double left = sample_height(x > 0 ? x - 1 : x, y);
+            const double right = sample_height(x + 1, y);
+            const double down = sample_height(x, y > 0 ? y - 1 : y);
+            const double up = sample_height(x, y + 1);
+            const double dx = (right - left) / (2.0 * static_cast<double>(cell_size));
+            const double dy = (up - down) / (2.0 * static_cast<double>(cell_size));
+
+            float3 normal_vector = float3{
+                static_cast<float>(-dx),
+                static_cast<float>(-dy),
+                1.0f
+            };
+            normal_vector = normalize(normal_vector);
+            if (length_squared(normal_vector) <= 1e-6f) {
+                normal_vector = float3{0.0f, 0.0f, 1.0f};
+            }
+
+            vert.normal = {normal_vector.x, normal_vector.y, normal_vector.z};
+            vert.uv = {static_cast<float>(x), static_cast<float>(y)};
+            vert.id = sampler.classic_cfg.surface_voxel;
+            mesh.vertices[index] = vert;
+        }
+    }
+
+    for (std::size_t y = 0; y + 1 < vertex_height; ++y) {
+        for (std::size_t x = 0; x + 1 < vertex_width; ++x) {
+            const std::uint32_t v0 = static_cast<std::uint32_t>(vertex_index(x, y));
+            const std::uint32_t v1 = static_cast<std::uint32_t>(vertex_index(x + 1, y));
+            const std::uint32_t v2 = static_cast<std::uint32_t>(vertex_index(x, y + 1));
+            const std::uint32_t v3 = static_cast<std::uint32_t>(vertex_index(x + 1, y + 1));
+
+            mesh.indices.push_back(v0);
+            mesh.indices.push_back(v1);
+            mesh.indices.push_back(v2);
+            mesh.indices.push_back(v1);
+            mesh.indices.push_back(v3);
+            mesh.indices.push_back(v2);
+        }
+    }
+
+    return mesh;
+}
+
 chunk_mesh_entry build_chunk_mesh(
     const chunk_extent& extent,
     const std::array<std::int64_t, 3>& origin,
@@ -619,6 +803,17 @@ chunk_mesh_entry build_chunk_mesh(
     const auto height_cache = build_height_cache(extent, origin, cell_size, sampler);
     const std::size_t cell_stride = height_cache.cell_stride;
     const std::size_t vertex_stride = height_cache.vertex_stride;
+
+    chunk_mesh_entry entry{};
+    entry.mode = mode;
+    entry.terrain = sampler.mode;
+
+    if (sampler.mode == terrain_mode::classic) {
+        entry.mesh = build_classic_height_mesh(extent, origin, cell_size, sampler, height_cache);
+        entry.origin = origin;
+        entry.cell_size = cell_size;
+        return entry;
+    }
 
     chunk_storage chunk{extent};
     auto voxels = chunk.voxels();
@@ -641,10 +836,6 @@ chunk_mesh_entry build_chunk_mesh(
             }
         }
     }
-
-    chunk_mesh_entry entry{};
-    entry.mode = mode;
-    entry.terrain = sampler.mode;
 
     if (mode == mesher_choice::marching) {
         auto density_sampler = [&](std::size_t vx, std::size_t vy, std::size_t vz) {
@@ -1245,11 +1436,11 @@ int main(int argc, char** argv) {
         {
             std::shared_lock<std::shared_mutex> lock{voxel_edits->mutex};
             move_player_axis(player.position, player.velocity.x, player.velocity.x * delta_seconds, 0,
-                current_half_extents, *sampler, voxel_edits.get(), player.on_ground);
+                current_half_extents, *sampler, voxel_edits.get(), mesher_mode, player.on_ground);
             move_player_axis(player.position, player.velocity.y, player.velocity.y * delta_seconds, 1,
-                current_half_extents, *sampler, voxel_edits.get(), player.on_ground);
+                current_half_extents, *sampler, voxel_edits.get(), mesher_mode, player.on_ground);
             move_player_axis(player.position, player.velocity.z, player.velocity.z * delta_seconds, 2,
-                current_half_extents, *sampler, voxel_edits.get(), player.on_ground);
+                current_half_extents, *sampler, voxel_edits.get(), mesher_mode, player.on_ground);
         }
 
         if (player.on_ground) {
@@ -1322,7 +1513,7 @@ int main(int argc, char** argv) {
 
                     SDL_Vertex v{};
                     v.position = projected.point;
-                    v.color = shade_color(mesh.vertices[idx].id, mesh.vertices[idx].normal, chunk.mode);
+                    v.color = shade_color(mesh.vertices[idx].id, mesh.vertices[idx].normal, chunk.mode, chunk.terrain);
                     v.tex_coord = SDL_FPoint{0.0f, 0.0f};
                     tri.vertices[corner] = v;
                     depth_sum += projected.depth;
