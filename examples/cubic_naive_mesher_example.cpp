@@ -15,20 +15,92 @@ struct face_definition {
     std::array<std::array<float, 2>, 4> uvs{};
 };
 
-constexpr std::array<face_definition, block_face_count> face_definitions{{
-    face_definition{{{{1.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f, 0.0f}}},
-        {{{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}}}}},
-    face_definition{{{{0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 1.0f}}},
-        {{{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}}}}},
-    face_definition{{{{0.0f, 1.0f, 0.0f}, {1.0f, 1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f, 1.0f}}},
-        {{{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}}}}},
-    face_definition{{{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 0.0f}}},
-        {{{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}}}}},
-    face_definition{{{{0.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f, 1.0f}}},
-        {{{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}}}}},
-    face_definition{{{{0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}}},
-        {{{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}}}}},
-}};
+constexpr face_definition face_definitions[block_face_count] = {
+    face_definition{
+        std::array<std::array<float, 3>, 4>{
+            std::array<float, 3>{1.0f, 0.0f, 0.0f},
+            std::array<float, 3>{1.0f, 0.0f, 1.0f},
+            std::array<float, 3>{1.0f, 1.0f, 1.0f},
+            std::array<float, 3>{1.0f, 1.0f, 0.0f},
+        },
+        std::array<std::array<float, 2>, 4>{
+            std::array<float, 2>{0.0f, 0.0f},
+            std::array<float, 2>{1.0f, 0.0f},
+            std::array<float, 2>{1.0f, 1.0f},
+            std::array<float, 2>{0.0f, 1.0f},
+        },
+    },
+    face_definition{
+        std::array<std::array<float, 3>, 4>{
+            std::array<float, 3>{0.0f, 0.0f, 0.0f},
+            std::array<float, 3>{0.0f, 1.0f, 0.0f},
+            std::array<float, 3>{0.0f, 1.0f, 1.0f},
+            std::array<float, 3>{0.0f, 0.0f, 1.0f},
+        },
+        std::array<std::array<float, 2>, 4>{
+            std::array<float, 2>{0.0f, 0.0f},
+            std::array<float, 2>{1.0f, 0.0f},
+            std::array<float, 2>{1.0f, 1.0f},
+            std::array<float, 2>{0.0f, 1.0f},
+        },
+    },
+    face_definition{
+        std::array<std::array<float, 3>, 4>{
+            std::array<float, 3>{0.0f, 1.0f, 0.0f},
+            std::array<float, 3>{1.0f, 1.0f, 0.0f},
+            std::array<float, 3>{1.0f, 1.0f, 1.0f},
+            std::array<float, 3>{0.0f, 1.0f, 1.0f},
+        },
+        std::array<std::array<float, 2>, 4>{
+            std::array<float, 2>{0.0f, 0.0f},
+            std::array<float, 2>{1.0f, 0.0f},
+            std::array<float, 2>{1.0f, 1.0f},
+            std::array<float, 2>{0.0f, 1.0f},
+        },
+    },
+    face_definition{
+        std::array<std::array<float, 3>, 4>{
+            std::array<float, 3>{0.0f, 0.0f, 0.0f},
+            std::array<float, 3>{0.0f, 0.0f, 1.0f},
+            std::array<float, 3>{1.0f, 0.0f, 1.0f},
+            std::array<float, 3>{1.0f, 0.0f, 0.0f},
+        },
+        std::array<std::array<float, 2>, 4>{
+            std::array<float, 2>{0.0f, 0.0f},
+            std::array<float, 2>{1.0f, 0.0f},
+            std::array<float, 2>{1.0f, 1.0f},
+            std::array<float, 2>{0.0f, 1.0f},
+        },
+    },
+    face_definition{
+        std::array<std::array<float, 3>, 4>{
+            std::array<float, 3>{0.0f, 0.0f, 1.0f},
+            std::array<float, 3>{1.0f, 0.0f, 1.0f},
+            std::array<float, 3>{1.0f, 1.0f, 1.0f},
+            std::array<float, 3>{0.0f, 1.0f, 1.0f},
+        },
+        std::array<std::array<float, 2>, 4>{
+            std::array<float, 2>{0.0f, 0.0f},
+            std::array<float, 2>{1.0f, 0.0f},
+            std::array<float, 2>{1.0f, 1.0f},
+            std::array<float, 2>{0.0f, 1.0f},
+        },
+    },
+    face_definition{
+        std::array<std::array<float, 3>, 4>{
+            std::array<float, 3>{0.0f, 0.0f, 0.0f},
+            std::array<float, 3>{0.0f, 1.0f, 0.0f},
+            std::array<float, 3>{1.0f, 1.0f, 0.0f},
+            std::array<float, 3>{1.0f, 0.0f, 0.0f},
+        },
+        std::array<std::array<float, 2>, 4>{
+            std::array<float, 2>{0.0f, 0.0f},
+            std::array<float, 2>{1.0f, 0.0f},
+            std::array<float, 2>{1.0f, 1.0f},
+            std::array<float, 2>{0.0f, 1.0f},
+        },
+    },
+};
 
 [[nodiscard]] bool voxel_is_solid(span3d<const voxel_id> voxels, int x, int y, int z) {
     if (x < 0 || y < 0 || z < 0) {
