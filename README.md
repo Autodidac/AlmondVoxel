@@ -68,6 +68,7 @@ graph TD
     Chunk --> Greedy
     Chunk --> Marching
     Chunk --> Serial
+
 ```
 
 ### Runtime data flow
@@ -82,6 +83,7 @@ flowchart LR
     Meshing --> Buffers[meshing::mesh_buffer]
     Buffers --> Demos["terrain_demo & examples"]
     RM -->|saver() on evict| Saver
+
 ```
 
 ### Build scripts and tooling
@@ -105,6 +107,7 @@ flowchart TD
     Run --> Tests
     Run --> Bench
     Run --> Demos
+
 ```
 
 ## Build and run
