@@ -44,10 +44,6 @@ enum class terrain_mode {
     classic
 };
 
-constexpr bool uses_heightfield_collision(mesher_choice mode, terrain_mode terrain) {
-    return mode == mesher_choice::marching || terrain == terrain_mode::classic;
-}
-
 enum class debug_display_mode {
     off,
     no_air_chunks,
@@ -512,10 +508,7 @@ struct voxel_edit_state {
 }
 
 [[nodiscard]] bool heightfield_cell_contains_solid(std::int64_t world_x, std::int64_t world_y,
-    std::int64_t world_z, const terrain_sampler& sampler, const voxel_edit_state* edits) {
-    if (auto override = find_override(edits, world_x, world_y, world_z); override.has_value()) {
-        return override.value() != voxel_id{};
-    }
+    std::int64_t world_z, const terrain_sampler& sampler) {
     for (int dz = 0; dz <= 1; ++dz) {
         const double sample_z = static_cast<double>(world_z + dz);
         for (int dy = 0; dy <= 1; ++dy) {
@@ -551,7 +544,13 @@ struct voxel_edit_state {
     for (std::int64_t z = block_min_z; z <= block_max_z; ++z) {
         for (std::int64_t y = block_min_y; y <= block_max_y; ++y) {
             for (std::int64_t x = block_min_x; x <= block_max_x; ++x) {
-                if (heightfield_cell_contains_solid(x, y, z, sampler, edits)) {
+                if (auto override_id = find_override(edits, x, y, z)) {
+                    if (*override_id != voxel_id{}) {
+                        return true;
+                    }
+                    continue;
+                }
+                if (heightfield_cell_contains_solid(x, y, z, sampler)) {
                     return true;
                 }
             }
@@ -588,14 +587,6 @@ struct voxel_edit_state {
     return false;
 }
 
-[[nodiscard]] bool box_intersects_scene(const float3& center, const float3& half_extents,
-    const terrain_sampler& sampler, const voxel_edit_state* edits, mesher_choice mode) {
-    if (uses_heightfield_collision(mode, sampler.mode)) {
-        return box_intersects_heightfield(center, half_extents, sampler, edits);
-    }
-    return box_intersects_voxels(center, half_extents, sampler, edits);
-}
-
 void move_player_axis(float3& position, float& velocity_component, float delta, int axis,
     const float3& half_extents, const terrain_sampler& sampler, const voxel_edit_state* edits,
     mesher_choice mode, bool& on_ground) {
@@ -613,7 +604,11 @@ void move_player_axis(float3& position, float& velocity_component, float delta, 
     }
 
     const auto intersects = [&](const float3& test_position) {
-        return box_intersects_scene(test_position, half_extents, sampler, edits, mode);
+        const bool use_heightfield = (mode == mesher_choice::marching) || (sampler.mode == terrain_mode::classic);
+        if (use_heightfield) {
+            return box_intersects_heightfield(test_position, half_extents, sampler, edits);
+        }
+        return box_intersects_voxels(test_position, half_extents, sampler, edits);
     };
 
     float3 start = position;
@@ -622,7 +617,7 @@ void move_player_axis(float3& position, float& velocity_component, float delta, 
         return;
     }
 
-    const bool use_heightfield = uses_heightfield_collision(mode, sampler.mode);
+    const bool use_heightfield = (mode == mesher_choice::marching) || (sampler.mode == terrain_mode::classic);
     if (use_heightfield) {
         float3 last_safe = start;
         float t_low = 0.0f;
@@ -731,8 +726,8 @@ struct voxel_raycast_hit {
     return true;
 }
 
-[[nodiscard]] voxel_raycast_hit raycast_scene(float3 origin, float3 direction, float max_distance,
-    mesher_choice mode, const terrain_sampler& sampler, const voxel_edit_state* edits) {
+[[nodiscard]] voxel_raycast_hit raycast_voxels(float3 origin, float3 direction, float max_distance,
+    const terrain_sampler& sampler, const voxel_edit_state* edits) {
     voxel_raycast_hit result{};
     if (length_squared(direction) <= 1e-6f) {
         return result;
@@ -742,7 +737,6 @@ struct voxel_raycast_hit {
     constexpr float step = 0.25f;
     float traveled = 0.0f;
     voxel_coord previous_block{std::numeric_limits<std::int64_t>::min(), 0, 0};
-    const bool use_heightfield = uses_heightfield_collision(mode, sampler.mode);
 
     while (traveled <= max_distance) {
         float3 sample = add(origin, scale(direction, traveled));
@@ -758,19 +752,7 @@ struct voxel_raycast_hit {
         }
         previous_block = block;
 
-        bool solid = false;
-        if (use_heightfield) {
-            if (auto override_id = find_override(edits, block.x, block.y, block.z); override_id.has_value()) {
-                solid = (*override_id != voxel_id{});
-            } else {
-                const double terrain_height = sampler.height_at(sample.x, sample.y);
-                solid = sample.z <= terrain_height;
-            }
-        } else {
-            solid = voxel_is_solid(sampler, edits, block.x, block.y, block.z);
-        }
-
-        if (solid) {
+        if (voxel_is_solid(sampler, edits, block.x, block.y, block.z)) {
             result.valid = true;
             result.hit = block;
             return result;
@@ -1312,6 +1294,7 @@ void rebuild_chunks_for_edit(const voxel_coord& block, const chunk_extent& exten
             const std::int64_t ry = region_y + dy;
             region_key region{static_cast<std::int32_t>(rx), static_cast<std::int32_t>(ry), 0};
             const chunk_instance_key key{region, lod.level};
+            cache.erase(key);
             const std::array<std::int64_t, 3> origin{
                 rx * span_x,
                 ry * span_y,
@@ -1407,7 +1390,7 @@ int main(int argc, char** argv) {
         player.position.z = static_cast<float>(height + static_cast<double>(player_half_height) + 1.0);
         {
             std::shared_lock<std::shared_mutex> lock{voxel_edits->mutex};
-            while (box_intersects_scene(player.position, player_half_extents, *sampler, voxel_edits.get(), mesher_mode)) {
+            while (box_intersects_voxels(player.position, player_half_extents, *sampler, voxel_edits.get())) {
                 player.position.z += 1.0f;
             }
         }
@@ -1482,8 +1465,8 @@ int main(int argc, char** argv) {
                     voxel_raycast_hit hit{};
                     {
                         std::shared_lock<std::shared_mutex> lock{voxel_edits->mutex};
-                        hit = raycast_scene(cam.position, compute_camera_vectors(cam).forward, 160.0f,
-                            mesher_mode, *sampler, voxel_edits.get());
+                        hit = raycast_voxels(cam.position, compute_camera_vectors(cam).forward, 160.0f,
+                            *sampler, voxel_edits.get());
                     }
                     if (event.button.button == SDL_BUTTON_LEFT) {
                         if (hit.valid) {
