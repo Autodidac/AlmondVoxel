@@ -747,6 +747,10 @@ struct overlay_input {
     std::vector<projected_triangle> triangles;
     std::vector<chunk_overlay_info> chunks;
     std::size_t generation{0};
+    bool highlight_selected_voxel{false};
+    float selected_voxel_x{0.0f};
+    float selected_voxel_y{0.0f};
+    float selected_voxel_z{0.0f};
 };
 
 struct overlay_output {
@@ -950,7 +954,7 @@ overlay_output build_overlay_output(overlay_input input) {
     output.terrain = input.terrain;
     output.generation = input.generation;
 
-    if (input.mode == debug_display_mode::disabled) {
+    if (input.mode == debug_display_mode::disabled && !input.highlight_selected_voxel) {
         return output;
     }
 
@@ -1153,38 +1157,82 @@ overlay_output build_overlay_output(overlay_input input) {
         if (!greedy_group.segments.empty()) {
             output.groups.push_back(std::move(greedy_group));
         }
-        return output;
+    } else if (input.mode == debug_display_mode::solid_chunks || input.mode == debug_display_mode::air_chunks) {
+        const SDL_Color mode_color = [&]() {
+            if (input.mode == debug_display_mode::solid_chunks) {
+                return input.terrain == terrain_mode::classic
+                    ? SDL_Color{255, 220, 150, 110}
+                    : SDL_Color{210, 235, 255, 90};
+            }
+            return input.terrain == terrain_mode::classic
+                ? SDL_Color{255, 185, 170, 125}
+                : SDL_Color{180, 195, 255, 130};
+        }();
+
+        overlay_draw_group group{};
+        group.color = mode_color;
+
+        for (const auto& chunk : input.chunks) {
+            const bool should_draw = (input.mode == debug_display_mode::solid_chunks) ? !chunk.is_air : chunk.is_air;
+            if (!should_draw) {
+                continue;
+            }
+
+            const std::array<float3, 8> corners{
+                float3{chunk.base_x, chunk.base_y, chunk.base_z},
+                float3{chunk.base_x + chunk.width, chunk.base_y, chunk.base_z},
+                float3{chunk.base_x, chunk.base_y + chunk.depth, chunk.base_z},
+                float3{chunk.base_x + chunk.width, chunk.base_y + chunk.depth, chunk.base_z},
+                float3{chunk.base_x, chunk.base_y, chunk.base_z + chunk.height},
+                float3{chunk.base_x + chunk.width, chunk.base_y, chunk.base_z + chunk.height},
+                float3{chunk.base_x, chunk.base_y + chunk.depth, chunk.base_z + chunk.height},
+                float3{chunk.base_x + chunk.width, chunk.base_y + chunk.depth, chunk.base_z + chunk.height},
+            };
+
+            std::array<SDL_FPoint, corners.size()> projected_points{};
+            std::array<bool, corners.size()> visibility{};
+            std::array<float3, corners.size()> camera_points{};
+
+            for (std::size_t i = 0; i < corners.size(); ++i) {
+                const clip_vertex corner_clip = make_clip_vertex(corners[i], SDL_FColor{}, input.cam, input.vectors);
+                camera_points[i] = float3{corner_clip.x, corner_clip.y, corner_clip.z};
+                const projection_result projected = project_perspective(corners[i], input.cam, input.vectors,
+                    input.output_width, input.output_height);
+                visibility[i] = projected.visible;
+                projected_points[i] = projected.point;
+            }
+
+            for (const auto& edge : box_edges) {
+                if (!visibility[edge.first] || !visibility[edge.second]) {
+                    continue;
+                }
+                if (segment_fully_occluded(camera_points[edge.first], camera_points[edge.second],
+                        projected_points[edge.first], projected_points[edge.second], input.cam,
+                        input.output_width, input.output_height, depth_ptr, overlay_depth_bias)) {
+                    continue;
+                }
+                group.segments.push_back(overlay_line_segment{projected_points[edge.first], projected_points[edge.second]});
+            }
+        }
+
+        if (!group.segments.empty()) {
+            output.groups.push_back(std::move(group));
+        }
     }
 
-    const SDL_Color mode_color = [&]() {
-        if (input.mode == debug_display_mode::solid_chunks) {
-            return input.terrain == terrain_mode::classic
-                ? SDL_Color{255, 220, 150, 110}
-                : SDL_Color{210, 235, 255, 90};
-        }
-        return input.terrain == terrain_mode::classic
-            ? SDL_Color{255, 185, 170, 125}
-            : SDL_Color{180, 195, 255, 130};
-    }();
-
-    overlay_draw_group group{};
-    group.color = mode_color;
-
-    for (const auto& chunk : input.chunks) {
-        const bool should_draw = (input.mode == debug_display_mode::solid_chunks) ? !chunk.is_air : chunk.is_air;
-        if (!should_draw) {
-            continue;
-        }
+    if (input.highlight_selected_voxel) {
+        overlay_draw_group selection{};
+        selection.color = SDL_Color{255, 255, 255, 220};
 
         const std::array<float3, 8> corners{
-            float3{chunk.base_x, chunk.base_y, chunk.base_z},
-            float3{chunk.base_x + chunk.width, chunk.base_y, chunk.base_z},
-            float3{chunk.base_x, chunk.base_y + chunk.depth, chunk.base_z},
-            float3{chunk.base_x + chunk.width, chunk.base_y + chunk.depth, chunk.base_z},
-            float3{chunk.base_x, chunk.base_y, chunk.base_z + chunk.height},
-            float3{chunk.base_x + chunk.width, chunk.base_y, chunk.base_z + chunk.height},
-            float3{chunk.base_x, chunk.base_y + chunk.depth, chunk.base_z + chunk.height},
-            float3{chunk.base_x + chunk.width, chunk.base_y + chunk.depth, chunk.base_z + chunk.height},
+            float3{input.selected_voxel_x, input.selected_voxel_y, input.selected_voxel_z},
+            float3{input.selected_voxel_x + 1.0f, input.selected_voxel_y, input.selected_voxel_z},
+            float3{input.selected_voxel_x, input.selected_voxel_y + 1.0f, input.selected_voxel_z},
+            float3{input.selected_voxel_x + 1.0f, input.selected_voxel_y + 1.0f, input.selected_voxel_z},
+            float3{input.selected_voxel_x, input.selected_voxel_y, input.selected_voxel_z + 1.0f},
+            float3{input.selected_voxel_x + 1.0f, input.selected_voxel_y, input.selected_voxel_z + 1.0f},
+            float3{input.selected_voxel_x, input.selected_voxel_y + 1.0f, input.selected_voxel_z + 1.0f},
+            float3{input.selected_voxel_x + 1.0f, input.selected_voxel_y + 1.0f, input.selected_voxel_z + 1.0f},
         };
 
         std::array<SDL_FPoint, corners.size()> projected_points{};
@@ -1209,12 +1257,12 @@ overlay_output build_overlay_output(overlay_input input) {
                     input.output_width, input.output_height, depth_ptr, overlay_depth_bias)) {
                 continue;
             }
-            group.segments.push_back(overlay_line_segment{projected_points[edge.first], projected_points[edge.second]});
+            selection.segments.push_back(overlay_line_segment{projected_points[edge.first], projected_points[edge.second]});
         }
-    }
 
-    if (!group.segments.empty()) {
-        output.groups.push_back(std::move(group));
+        if (!selection.segments.empty()) {
+            output.groups.push_back(std::move(selection));
+        }
     }
 
     return output;
@@ -2509,6 +2557,16 @@ int main(int argc, char** argv) {
 
         camera_vectors vectors = compute_camera_vectors(cam);
 
+        voxel_raycast_hit hovered_block{};
+        bool highlight_selected_voxel = false;
+        if (mesher_mode != mesher_choice::marching) {
+            std::shared_lock<std::shared_mutex> lock{voxel_edits->mutex};
+            const bool use_heightfield = collision_uses_heightfield(sampler->mode, mesher_mode);
+            hovered_block = raycast_voxels(cam.position, vectors.forward, 160.0f,
+                *sampler, voxel_edits.get(), use_heightfield);
+            highlight_selected_voxel = hovered_block.valid;
+        }
+
         const bool* keyboard = SDL_GetKeyboardState(nullptr);
         const float walk_speed = 8.0f;
         const float sprint_speed = 14.0f;
@@ -2721,7 +2779,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (debug_mode != debug_display_mode::disabled) {
+        if (debug_mode != debug_display_mode::disabled || highlight_selected_voxel) {
             overlay_input job{};
             job.mode = debug_mode;
             job.terrain = terrain_setting;
@@ -2729,48 +2787,63 @@ int main(int argc, char** argv) {
             job.vectors = vectors;
             job.output_width = output_width;
             job.output_height = output_height;
+            job.highlight_selected_voxel = highlight_selected_voxel;
+            if (highlight_selected_voxel) {
+                job.selected_voxel_x = static_cast<float>(hovered_block.hit.x);
+                job.selected_voxel_y = static_cast<float>(hovered_block.hit.y);
+                job.selected_voxel_z = static_cast<float>(hovered_block.hit.z);
+            }
+
             std::unordered_set<chunk_instance_key, chunk_instance_hash> overlay_chunks;
-            overlay_chunks.reserve(chunk_meshes.size());
-            job.chunks.reserve(chunk_meshes.size());
-            const auto find_lod = [&](int cell_size) -> const lod_definition* {
-                for (const auto& lod : lods) {
-                    if (lod.cell_size == cell_size) {
-                        return &lod;
+            if (debug_mode != debug_display_mode::disabled) {
+                overlay_chunks.reserve(chunk_meshes.size());
+                job.chunks.reserve(chunk_meshes.size());
+                const auto find_lod = [&](int cell_size) -> const lod_definition* {
+                    for (const auto& lod : lods) {
+                        if (lod.cell_size == cell_size) {
+                            return &lod;
+                        }
+                    }
+                    return nullptr;
+                };
+                for (const auto& [key, chunk] : chunk_meshes) {
+                    chunk_overlay_info info{};
+                    info.base_x = static_cast<float>(chunk.origin[0]);
+                    info.base_y = static_cast<float>(chunk.origin[1]);
+                    info.base_z = static_cast<float>(chunk.origin[2]);
+                    info.width = static_cast<float>(chunk_dimensions.x * chunk.cell_size);
+                    info.depth = static_cast<float>(chunk_dimensions.y * chunk.cell_size);
+                    info.height = static_cast<float>(chunk_dimensions.z);
+                    info.is_air = chunk.mesh.indices.empty();
+                    const lod_definition* lod = find_lod(chunk.cell_size);
+                    const float base_overlay_distance = lod ? lod->max_distance : lods.back().max_distance;
+                    const float overlay_limit = std::max(0.0f, base_overlay_distance * overlay_distance_scale);
+                    const float chunk_center_x = info.base_x + info.width * 0.5f;
+                    const float chunk_center_y = info.base_y + info.depth * 0.5f;
+                    const float dx = chunk_center_x - cam.position.x;
+                    const float dy = chunk_center_y - cam.position.y;
+                    const float planar_distance = std::sqrt(dx * dx + dy * dy);
+                    const float chunk_radius = 0.5f * std::sqrt(info.width * info.width + info.depth * info.depth);
+                    if (planar_distance - chunk_radius > overlay_limit) {
+                        continue;
+                    }
+                    job.chunks.push_back(info);
+                    overlay_chunks.insert(key);
+                }
+            }
+
+            job.triangles.reserve(triangles.size());
+            if (debug_mode != debug_display_mode::disabled) {
+                for (const auto& tri : triangles) {
+                    const chunk_instance_key tri_key{tri.region, tri.lod};
+                    if (overlay_chunks.find(tri_key) != overlay_chunks.end()) {
+                        job.triangles.push_back(tri);
                     }
                 }
-                return nullptr;
-            };
-            for (const auto& [key, chunk] : chunk_meshes) {
-                chunk_overlay_info info{};
-                info.base_x = static_cast<float>(chunk.origin[0]);
-                info.base_y = static_cast<float>(chunk.origin[1]);
-                info.base_z = static_cast<float>(chunk.origin[2]);
-                info.width = static_cast<float>(chunk_dimensions.x * chunk.cell_size);
-                info.depth = static_cast<float>(chunk_dimensions.y * chunk.cell_size);
-                info.height = static_cast<float>(chunk_dimensions.z);
-                info.is_air = chunk.mesh.indices.empty();
-                const lod_definition* lod = find_lod(chunk.cell_size);
-                const float base_overlay_distance = lod ? lod->max_distance : lods.back().max_distance;
-                const float overlay_limit = std::max(0.0f, base_overlay_distance * overlay_distance_scale);
-                const float chunk_center_x = info.base_x + info.width * 0.5f;
-                const float chunk_center_y = info.base_y + info.depth * 0.5f;
-                const float dx = chunk_center_x - cam.position.x;
-                const float dy = chunk_center_y - cam.position.y;
-                const float planar_distance = std::sqrt(dx * dx + dy * dy);
-                const float chunk_radius = 0.5f * std::sqrt(info.width * info.width + info.depth * info.depth);
-                if (planar_distance - chunk_radius > overlay_limit) {
-                    continue;
-                }
-                job.chunks.push_back(info);
-                overlay_chunks.insert(key);
+            } else if (highlight_selected_voxel) {
+                job.triangles.insert(job.triangles.end(), triangles.begin(), triangles.end());
             }
-            job.triangles.reserve(triangles.size());
-            for (const auto& tri : triangles) {
-                const chunk_instance_key tri_key{tri.region, tri.lod};
-                if (overlay_chunks.find(tri_key) != overlay_chunks.end()) {
-                    job.triangles.push_back(tri);
-                }
-            }
+
             job.generation = ++overlay_generation;
             overlay_render_data = build_overlay_output(std::move(job));
         } else {
