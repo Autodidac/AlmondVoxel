@@ -9,9 +9,11 @@ int main() {
 
     terrain::classic_config config{};
     config.surface_voxel = voxel_id{2};
-    config.subsurface_voxel = voxel_id{3};
-    config.bedrock_voxel = voxel_id{4};
+    config.filler_voxel = voxel_id{3};
+    config.subsurface_voxel = voxel_id{4};
+    config.bedrock_voxel = voxel_id{5};
     config.bedrock_layers = 3;
+    config.surface_depth = 3;
 
     terrain::classic_heightfield generator{cubic_extent(32), config, 20240522ull};
 
