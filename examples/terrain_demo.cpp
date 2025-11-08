@@ -1744,6 +1744,7 @@ int main(int argc, char** argv) {
               << (terrain_setting == terrain_mode::smooth ? "smooth noise terrain" : "classic heightfield terrain")
               << ". Toggle mesher with 'M' and terrain with 'T'. Left click removes voxels, right click places them."
               << " Press Space to jump and hold Shift to sprint. Use F3 to cycle debug overlays (wireframe, non-air, air-only).\n";
+    std::cout << "Render distance starts at the minimum setting. Increase it gradually with '+' if performance allows.\n";
 
     const float3 player_half_extents{player_radius, player_radius, player_half_height};
     player_state player{};
@@ -1786,10 +1787,10 @@ int main(int argc, char** argv) {
     std::optional<overlay_output> overlay_render_data;
     std::size_t overlay_generation = 0;
 
-    float render_distance_scale = 1.0f;
     constexpr float min_render_distance_scale = 0.25f;
     constexpr float max_render_distance_scale = 1.25f;
     constexpr float render_distance_step = 0.05f;
+    float render_distance_scale = min_render_distance_scale;
 
     std::vector<projected_triangle> triangles;
     std::vector<SDL_Vertex> draw_vertices;
