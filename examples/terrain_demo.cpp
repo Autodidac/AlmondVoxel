@@ -2072,7 +2072,7 @@ int main(int argc, char** argv) {
     constexpr float min_render_distance_scale = 0.25f;
     constexpr float max_render_distance_scale = 1.25f;
     constexpr float render_distance_step = 0.05f;
-    float render_distance_scale = min_render_distance_scale;
+    float render_distance_scale = 1.0f;
 
     constexpr float min_overlay_distance_scale = 0.25f;
     constexpr float max_overlay_distance_scale = 1.25f;
