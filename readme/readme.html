@@ -1,77 +1,56 @@
-﻿<!DOCTYPE html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
   <head>
-    <meta charset='utf-8'>
-
-    <link rel="stylesheet" type="text/css" href="stylesheet.css" media="screen">
-
-    <title>Getting Started</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" type="text/css" href="stylesheet.css" media="screen" />
+    <title>AlmondVoxel quick start</title>
   </head>
-
-<body>
-
+  <body>
     <div class="container">
-        <div id="header">
-            <h1>Getting Started</h1>
-            <h2>Visual C++ for Linux Development</h2>
-        </div>
-    
-    <table>
-    <tr>    
-    <div id="main_content">
-        
-        <td>
+      <div id="header">
+        <h1>AlmondVoxel quick start</h1>
+        <h2>Cross-platform build notes for Visual Studio users</h2>
+      </div>
+      <div id="main_content">
         <div id="lpanel">
-            <h1>Setting up your project for Linux Development</h1>
+          <h1>Prerequisites</h1>
+          <ul>
+            <li>Visual Studio 2022 with the Desktop development with C++ workload.</li>
+            <li>Git for Windows (provides Git Bash for running the helper scripts).</li>
+            <li>CMake 3.23+ and Ninja (install via the Visual Studio installer or package managers such as Chocolatey).</li>
+            <li>SDL3 development package from vcpkg (<code>vcpkg install sdl3</code>) for the <code>terrain_demo</code>.</li>
+          </ul>
 
-            <p>With this workload you can author C++ code for Linux servers, desktops and devices. You can manage your connections to these machines from within VS. VS will automatically copy and remotely build your sources and can launch your application with the debugger. Our project system supports targeting specific architectures, including ARM.</p>
-            <img src="images\ArchOptions.gif"/>
-            
-            <h1>Connecting to Linux</h1>
-            <h2>Prerequisites</h2>
-            <p>Today we only support building remotely on the Linux target machine. We are not limited by specific Linux distros but we do have dependencies on the presence of some tools. Specifically, we need openssh-server, g++, gdb and gdbserver. Use your favorite package manager to install them, e.g. on Debian based systems: sudo apt-get install openssh-server g++ gdb gdbserver</p>
-            
-            <h2>First connection</h2>
-            <p>The first time you target a Linux machine you will be prompted for connection information.  This is triggered by building the project.</p>
-            <img src="images\firstconnection.png"/>
-                
-            <h2>Adding and removing connections</h2>
-            <p>To add a new connection, go to Tools > Options and search for Connection, Connection Manager will be under Cross Platform. From here you can add and remove connections.</p>
-            <img src="images\ManageConnections.gif"/>
-            
-            <p>To change which connection a project is using go to the project properties general settings and update the Remote Build Machine option.</p>
-            <img src="images\ChangeRemote.gif"/>
-            
-            <h1>Project Properties</h1>
-            <p>All of the options necessary to control C++ compilation are exposed on the project properies pages. We'll cover a few specific to how things work for Linux. First under general settings, you will see the remote root is set to ~/projects/ by default and that we are setting the remote project directory to match our project name in that location.</p>
-            <img src="images\OutputTypes.gif"/>
-            
-            <p>Looking at the General settings for the project, you can see how our output and intermediate directories were configured. Additionally, you’ll see that this project was configured as an application – thus our executable is under bin/x64/Debug/ as ConsoleApplication1.out. Notice that for configuration types we also support static and dynamic libraries.</p>
-            
-            <p>Add additional library dependencies on the Linker > Input property page.</p>
-            <img src="images\linker.png"/>
-            
-            <p>You can pass additional pre launch commands to the debugger to do things like launch graphical apps on the remote linux machine.</p>
-            <img src="images\debuggerexport.png"/>
-            
-            <p>You can also send post build events to control remote behavior, as in this example that exports a gpio pin for use without requiring the executable run as super user.</p>
-            <img src="images\postbuild.png"/>
-            
+          <h1>Configure and build</h1>
+          <ol>
+            <li>Open <em>Developer PowerShell for VS</em> or <em>x64 Native Tools Command Prompt</em>.</li>
+            <li>Clone the repository: <code>git clone https://example.com/AlmondVoxel.git</code>.</li>
+            <li>Configure the build tree:<br /><code>bash ./cmake/configure.sh msvc Debug</code></li>
+            <li>Compile the demos, tests, and benchmarks:<br /><code>bash ./build.sh msvc Debug</code></li>
+          </ol>
+
+          <h1>Run demos and tests</h1>
+          <p>Use <code>run.sh</code> to start a target from any shell:</p>
+          <pre><code>bash ./run.sh terrain_demo
+bash ./run.sh almond_voxel_tests
+bash ./run.sh mesh_bench</code></pre>
+          <p>Each command searches the generated build folders and launches the first matching executable.</p>
+
+          <h1>Headless or remote builds</h1>
+          <p>When working on a headless agent, disable the SDL3 demo during configuration:</p>
+          <pre><code>bash ./cmake/configure.sh msvc Release -DALMOND_VOXEL_BUILD_EXAMPLES=OFF</code></pre>
+          <p>The examples can be re-enabled locally by reconfiguring with the default options.</p>
         </div>
-        </td>
-        <td>
         <div id="rpanel">
-
-            <h1>Resources</h1>
-
-            <p>Check out the <a href="http://aka.ms/vslinux">VC++ for Linux Development page</a> where we will keep updates posted and provider more in depth details on usage.</p>
-            <h1>Give us feedback</h1>
-            <p>Use the send feedback function in Visual Studio or contact us through <a href=" https://developercommunity.visualstudio.com/">Developer Community</a></p>
+          <h1>Additional notes</h1>
+          <ul>
+            <li>The project is maintained privately; external contributions and pull requests are not accepted.</li>
+            <li>Refer to <code>README.md</code> for a module overview and cross-platform build matrix.</li>
+            <li>Check <code>docs/windows.md</code> for troubleshooting guidance specific to MSVC environments.</li>
+            <li>Linux or macOS builds follow the same scripts with the <code>gcc</code> or <code>clang</code> arguments.</li>
+          </ul>
         </div>
-        </td>   
+      </div>
     </div>
-    </tr>
-    </table>
-    </div>
-</body>
+  </body>
 </html>

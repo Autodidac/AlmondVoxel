@@ -1,32 +1,32 @@
 # AlmondVoxel roadmap
 
-This roadmap highlights the upcoming work required to evolve AlmondVoxel into a production-ready voxel foundation. Items are grouped by horizon and focus on capabilities that unlock new workflows for downstream engines.
+This roadmap captures internal priorities for evolving AlmondVoxel. It is published for visibility only; timelines may shift based on internal needs.
 
 ## Table of contents
 - [Short-term (next release)](#short-term-next-release)
-- [Mid-term (next-quarter)](#mid-term-next-quarter)
+- [Mid-term (next quarter)](#mid-term-next-quarter)
 - [Long-term (6–12 months)](#long-term-6–12-months)
-- [Staying current](#staying-current)
+- [Staying aligned](#staying-aligned)
 
 ## Short-term (next release)
-- **Noise pipeline presets** – ship curated biome tables and noise stacks for desert, tundra, and volcanic regions.
-- **Mesh optimisation toggles** – expose compile-time flags for greedy mesher decimation and lightmap UV generation.
-- **Streaming sandbox polish** – add frustum culling visualisation, chunk residency overlays, and hot-reloadable configuration files.
-- **Documentation uplift** – extend platform guides with performance counters and profiling recipes.
+- **Region compression adapters** – provide ready-made zlib/zstd adapters for `chunk_storage::set_compression_hooks`.
+- **Terrain demo polish** – expose brush presets, add camera path recording, and surface debug overlays (FPS, residency, edit history).
+- **Serialization regression tests** – extend `almond_voxel_tests` with round-trip cases covering metadata/skylight channels.
+- **Documentation cadence** – ensure new modules are reflected in the API overview and platform guides within the same release window.
 
 ## Mid-term (next quarter)
-- **GPU meshing backend** – prototype a compute-shader mesher for Vulkan/DX12 targets with a CPU fallback.
-- **Region replication service** – provide an optional background service for synchronising region deltas over the network.
-- **Data-oriented storage** – experiment with struct-of-arrays chunk layouts to improve cache behaviour on dense edits.
-- **Continuous integration** – automate Linux/Windows builds that compile examples, run `voxel_tests`, and publish artefacts.
+- **GPU meshing prototype** – evaluate compute-driven greedy meshing for Vulkan/DX12 backends with CPU fallback.
+- **Region streaming metrics** – integrate optional instrumentation to log LRU churn, task budgets, and average loader latency.
+- **CLI tooling** – add a headless snapshot utility that exercises serialization and editing helpers for automated pipelines.
+- **Continuous integration** – stand up GitHub Actions runners for GCC, Clang, and MSVC to build demos/tests on every push.
 
 ## Long-term (6–12 months)
-- **ECS bridge** – author adapters for popular ECS frameworks (EnTT, flecs) to stream voxel regions directly into gameplay loops.
-- **Editor integration** – package an Unreal/Unity plugin that consumes the header-only library for custom tooling.
-- **Procedural authoring toolkit** – build a node-based editor that exports AlmondVoxel configuration packs.
-- **Persistent world services** – define schemas and services for cloud-hosted region archives with delta compression.
+- **Authoring toolkit** – explore a node-based editor for composing terrain generators that export AlmondVoxel configuration packs.
+- **Engine adapters** – prototype bridges for ECS/gameplay frameworks to consume `region_manager` snapshots efficiently.
+- **Streaming services** – design a persistence service for multi-user worlds with delta compression and conflict resolution.
+- **Extended lighting model** – research voxel GI probes and multiple shadow channels for advanced demos.
 
-## Staying current
-- Propose roadmap additions or changes through GitHub discussions and link real-world scenarios that benefit from the work.
-- Update this document as features ship or scopes change to keep contributors aligned on priorities.
-- Reference the roadmap in release notes so downstream projects know when to adopt new modules.
+## Staying aligned
+- Review this roadmap when planning releases so feature work, documentation, and tests land together.
+- Capture major changes in `docs/CHANGELOG.md` and summarise the impact in the README when user-facing behaviour shifts.
+- This project is maintained privately; roadmap updates are published for awareness rather than public contribution planning.
