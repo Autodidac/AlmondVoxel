@@ -3,6 +3,7 @@
 #include <exception>
 #include <functional>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -77,6 +78,15 @@ inline void run_tests() {
     do {                                                                                                                 \
         if (!(expr)) {                                                                                                   \
             throw ::almond::voxel::test::test_failure{std::string{"CHECK failed: "} + #expr};                             \
+        }                                                                                                                \
+    } while (false)
+
+#define CHECK_MESSAGE(expr, message)                                                                                      \
+    do {                                                                                                                 \
+        if (!(expr)) {                                                                                                   \
+            std::ostringstream almond_voxel_check_stream;                                                                \
+            almond_voxel_check_stream << "CHECK failed: " << #expr << " - " << message;                                   \
+            throw ::almond::voxel::test::test_failure{almond_voxel_check_stream.str()};                                   \
         }                                                                                                                \
     } while (false)
 
