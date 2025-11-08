@@ -40,6 +40,7 @@ public:
     using loader_type = std::function<chunk_storage(const region_key&)>;
     using saver_type = std::function<void(const region_key&, const chunk_storage&)>;
     using task_type = std::function<void(chunk_storage&, const region_key&)>;
+    using dirty_observer = std::function<void(const region_key&)>;
 
     explicit region_manager(chunk_extent chunk_dimensions = cubic_extent(32));
 
@@ -60,6 +61,8 @@ public:
 
     void enqueue_task(const region_key& key, task_type task);
     std::size_t tick(std::size_t budget = std::numeric_limits<std::size_t>::max());
+
+    void add_dirty_observer(dirty_observer observer);
 
     void for_each_loaded(const std::function<void(const region_key&, const chunk_storage&)>& visitor) const;
 
@@ -89,6 +92,7 @@ private:
     loader_type loader_{};
     saver_type saver_{};
     std::deque<std::pair<region_key, task_type>> task_queue_{};
+    std::vector<dirty_observer> dirty_observers_{};
 };
 
 inline region_manager::region_manager(chunk_extent chunk_dimensions)
@@ -143,6 +147,10 @@ inline std::size_t region_manager::tick(std::size_t budget) {
     }
     evict_until_within_limit();
     return processed;
+}
+
+inline void region_manager::add_dirty_observer(dirty_observer observer) {
+    dirty_observers_.push_back(std::move(observer));
 }
 
 inline void region_manager::for_each_loaded(const std::function<void(const region_key&, const chunk_storage&)>& visitor) const {
@@ -207,6 +215,15 @@ inline chunk_storage& region_manager::load_or_create(const region_key& key) {
         chunk = std::make_shared<chunk_storage>(loader_(key));
     } else {
         chunk = std::make_shared<chunk_storage>(chunk_extent_);
+    }
+    if (chunk) {
+        chunk->add_dirty_listener([this, key]() {
+            for (auto& observer : dirty_observers_) {
+                if (observer) {
+                    observer(key);
+                }
+            }
+        });
     }
     auto [it, inserted] = regions_.emplace(key, entry{std::move(chunk), false});
     (void)inserted;

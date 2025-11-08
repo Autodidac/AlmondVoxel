@@ -44,6 +44,7 @@ public:
     };
     using compress_callback = std::function<byte_vector(const const_planes_view&)>;
     using decompress_callback = std::function<void(const planes_view&, std::span<const std::byte>)>;
+    using dirty_listener = std::function<void()>;
 
     explicit chunk_storage(chunk_extent extent = cubic_extent(32));
     explicit chunk_storage(chunk_storage_config config);
@@ -95,8 +96,11 @@ public:
         compressed_blob_.clear();
     }
 
-    void mark_dirty(bool value = true) noexcept { dirty_ = value; }
+    void mark_dirty(bool value = true) noexcept;
     [[nodiscard]] bool dirty() const noexcept { return dirty_; }
+
+    void add_dirty_listener(dirty_listener listener);
+    void clear_dirty_listeners();
 
 private:
     void ensure_capacity();
@@ -124,6 +128,7 @@ private:
     bool compressed_{false};
     byte_vector compressed_blob_{};
     std::mutex compression_mutex_{};
+    std::vector<dirty_listener> dirty_listeners_{};
 };
 
 inline chunk_storage::chunk_storage(chunk_extent extent)
@@ -153,7 +158,8 @@ inline chunk_storage::chunk_storage(chunk_storage&& other) noexcept
     , dirty_{other.dirty_}
     , compression_requested_{other.compression_requested_}
     , compressed_{other.compressed_}
-    , compressed_blob_{std::move(other.compressed_blob_)} {
+    , compressed_blob_{std::move(other.compressed_blob_)}
+    , dirty_listeners_{std::move(other.dirty_listeners_)} {
     other.extent_ = chunk_extent{};
     other.materials_enabled_ = false;
     other.high_precision_lighting_enabled_ = false;
@@ -163,6 +169,7 @@ inline chunk_storage::chunk_storage(chunk_storage&& other) noexcept
     other.dirty_ = false;
     other.compression_requested_ = false;
     other.compressed_ = false;
+    other.dirty_listeners_.clear();
 }
 
 inline chunk_storage& chunk_storage::operator=(chunk_storage&& other) noexcept {
@@ -184,6 +191,7 @@ inline chunk_storage& chunk_storage::operator=(chunk_storage&& other) noexcept {
         compression_requested_ = other.compression_requested_;
         compressed_ = other.compressed_;
         compressed_blob_ = std::move(other.compressed_blob_);
+        dirty_listeners_ = std::move(other.dirty_listeners_);
 
         other.extent_ = chunk_extent{};
         other.materials_enabled_ = false;
@@ -197,8 +205,31 @@ inline chunk_storage& chunk_storage::operator=(chunk_storage&& other) noexcept {
         other.compressed_blob_.clear();
         other.compress_ = {};
         other.decompress_ = {};
+        other.dirty_listeners_.clear();
     }
     return *this;
+}
+
+inline void chunk_storage::mark_dirty(bool value) noexcept {
+    const bool notify = value;
+    if (dirty_ != value) {
+        dirty_ = value;
+    }
+    if (notify && !dirty_listeners_.empty()) {
+        for (auto& listener : dirty_listeners_) {
+            if (listener) {
+                listener();
+            }
+        }
+    }
+}
+
+inline void chunk_storage::add_dirty_listener(dirty_listener listener) {
+    dirty_listeners_.push_back(std::move(listener));
+}
+
+inline void chunk_storage::clear_dirty_listeners() {
+    dirty_listeners_.clear();
 }
 
 inline span3d<voxel_id> chunk_storage::voxels() noexcept {
