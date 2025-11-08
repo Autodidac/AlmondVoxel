@@ -47,6 +47,11 @@ enum class terrain_mode {
     classic
 };
 
+struct demo_mode_entry {
+    mesher_choice mesher;
+    terrain_mode terrain;
+};
+
 enum class debug_display_mode {
     off,
     wireframe,
@@ -95,6 +100,40 @@ constexpr bool collision_uses_heightfield(terrain_mode terrain, mesher_choice me
         return true;
     }
     return mesher == mesher_choice::marching;
+}
+
+constexpr std::string_view mesher_label(mesher_choice choice) {
+    switch (choice) {
+    case mesher_choice::greedy:
+        return "greedy mesher";
+    case mesher_choice::marching:
+        return "marching cubes mesher";
+    }
+    return "greedy mesher";
+}
+
+constexpr std::string_view terrain_label(terrain_mode mode) {
+    switch (mode) {
+    case terrain_mode::smooth:
+        return "smooth noise terrain";
+    case terrain_mode::classic:
+        return "classic heightfield terrain";
+    }
+    return "smooth noise terrain";
+}
+
+inline std::string demo_mode_description(mesher_choice mesher, terrain_mode terrain) {
+    std::string description{mesher_label(mesher)};
+    description.append(" and ");
+    description.append(terrain_label(terrain));
+    return description;
+}
+
+inline std::string demo_mode_label(mesher_choice mesher, terrain_mode terrain) {
+    std::string label{mesher_label(mesher)};
+    label.append(" + ");
+    label.append(terrain_label(terrain));
+    return label;
 }
 
 struct float3 {
@@ -2018,6 +2057,22 @@ int main(int argc, char** argv) {
         }
     }
 
+    std::vector<demo_mode_entry> demo_modes{
+        demo_mode_entry{mesher_choice::greedy, terrain_mode::smooth},
+        demo_mode_entry{mesher_choice::marching, terrain_mode::smooth},
+        demo_mode_entry{mesher_choice::greedy, terrain_mode::classic},
+    };
+    auto preset_matches = [&](const demo_mode_entry& entry) {
+        return entry.mesher == mesher_mode && entry.terrain == terrain_setting;
+    };
+    auto preset_iterator = std::find_if(demo_modes.begin(), demo_modes.end(), preset_matches);
+    if (preset_iterator == demo_modes.end()) {
+        demo_modes.push_back(demo_mode_entry{mesher_mode, terrain_setting});
+        preset_iterator = demo_modes.end();
+        --preset_iterator;
+    }
+    std::size_t demo_mode_index = static_cast<std::size_t>(preset_iterator - demo_modes.begin());
+
     try {
         if (test::has_registered_tests()) {
             test::run_tests();
@@ -2058,11 +2113,12 @@ int main(int argc, char** argv) {
         lod_definition{2, 440.0f, 1400.0f, 4},
     };
 
-    std::cout << "Starting terrain demo with "
-              << (mesher_mode == mesher_choice::greedy ? "greedy mesher" : "marching cubes mesher")
-              << " and "
-              << (terrain_setting == terrain_mode::smooth ? "smooth noise terrain" : "classic heightfield terrain")
-              << ". Toggle mesher with 'M' and terrain with 'T'. Left click removes voxels, right click places them."
+    std::cout << "Starting terrain demo with " << demo_mode_description(mesher_mode, terrain_setting)
+              << ". Press Alt+M to cycle demo presets (1) "
+              << demo_mode_label(demo_modes[0].mesher, demo_modes[0].terrain) << ", (2) "
+              << demo_mode_label(demo_modes[1].mesher, demo_modes[1].terrain) << ", (3) "
+              << demo_mode_label(demo_modes[2].mesher, demo_modes[2].terrain)
+              << ". Left click removes voxels, right click places them."
               << " Press Space to jump and hold Shift to sprint. Use F3 to cycle debug overlays (wireframe, non-air, air-only).\n";
     std::cout << "Render distance starts at the minimum setting. Adjust it with '[' and ']' as performance allows.\n";
     std::cout << "Debug overlay distance can be tuned independently with '-' and '='.\n";
@@ -2076,6 +2132,9 @@ int main(int argc, char** argv) {
     cam.yaw = 0.0f;
     cam.pitch = -0.45f;
     cam.position = add(player.position, float3{0.0f, 0.0f, player_eye_offset});
+
+    std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash> chunk_meshes;
+    chunk_build_dispatcher chunk_builder;
 
     auto sync_camera = [&]() {
         cam.position = add(player.position, float3{0.0f, 0.0f, player_eye_offset});
@@ -2094,7 +2153,26 @@ int main(int argc, char** argv) {
         player.on_ground = false;
         sync_camera();
     };
-    align_player_height();
+
+    auto apply_demo_mode = [&](std::size_t new_index, bool announce) {
+        if (demo_modes.empty()) {
+            return;
+        }
+        demo_mode_index = new_index % demo_modes.size();
+        const demo_mode_entry& entry = demo_modes[demo_mode_index];
+        mesher_mode = entry.mesher;
+        terrain_setting = entry.terrain;
+        sampler = std::make_shared<terrain_sampler>(terrain_setting, chunk_dimensions);
+        chunk_meshes.clear();
+        chunk_builder.clear();
+        align_player_height();
+        if (announce) {
+            std::cout << "Switched demo preset to (" << (demo_mode_index + 1) << "/" << demo_modes.size() << ") "
+                      << demo_mode_description(entry.mesher, entry.terrain) << "\n";
+        }
+    };
+
+    apply_demo_mode(demo_mode_index, false);
 
     bool running = true;
     debug_display_mode debug_mode = debug_display_mode::off;
@@ -2103,9 +2181,6 @@ int main(int argc, char** argv) {
     std::uint64_t fps_sample_start = previous_ticks;
     int fps_frame_count = 0;
     float displayed_fps = 0.0f;
-
-    std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash> chunk_meshes;
-    chunk_build_dispatcher chunk_builder;
 
     std::optional<overlay_output> overlay_render_data;
     std::size_t overlay_generation = 0;
@@ -2144,20 +2219,8 @@ int main(int argc, char** argv) {
                 } else if (event.key.key == SDLK_F1) {
                     mouse_captured = !mouse_captured;
                     SDL_SetWindowRelativeMouseMode(window, mouse_captured ? true : false);
-                } else if (event.key.key == SDLK_M) {
-                    mesher_mode = mesher_mode == mesher_choice::greedy ? mesher_choice::marching : mesher_choice::greedy;
-                    chunk_meshes.clear();
-                    chunk_builder.clear();
-                    std::cout << "Switched mesher to "
-                              << (mesher_mode == mesher_choice::greedy ? "greedy" : "marching cubes") << "\n";
-                } else if (event.key.key == SDLK_T) {
-                    terrain_setting = terrain_setting == terrain_mode::smooth ? terrain_mode::classic : terrain_mode::smooth;
-                    sampler = std::make_shared<terrain_sampler>(terrain_setting, chunk_dimensions);
-                    chunk_meshes.clear();
-                    chunk_builder.clear();
-                    std::cout << "Switched terrain to "
-                              << (terrain_setting == terrain_mode::smooth ? "smooth noise" : "classic heightfield") << "\n";
-                    align_player_height();
+                } else if (event.key.key == SDLK_M && (event.key.mod & SDL_KMOD_ALT)) {
+                    apply_demo_mode(demo_mode_index + 1, true);
                 } else if (event.key.key == SDLK_RIGHTBRACKET) {
                     const float previous_scale = render_distance_scale;
                     render_distance_scale = std::min(render_distance_scale + render_distance_step, max_render_distance_scale);
