@@ -899,6 +899,18 @@ overlay_output build_overlay_output(overlay_input input) {
             ++entry.count;
         };
 
+        const auto is_axis_aligned_normal = [](const float3& normal) {
+            const float ax = std::abs(normal.x);
+            const float ay = std::abs(normal.y);
+            const float az = std::abs(normal.z);
+            const float max_component = std::max({ax, ay, az});
+            if (max_component < 0.999f) {
+                return false;
+            }
+            const float other_sum = (ax + ay + az) - max_component;
+            return other_sum < 1e-3f;
+        };
+
         for (const auto& tri : input.triangles) {
             const SDL_FPoint& a = tri.vertices[0].position;
             const SDL_FPoint& b = tri.vertices[1].position;
@@ -909,7 +921,9 @@ overlay_output build_overlay_output(overlay_input input) {
             const float3& world_a = tri.world_vertices[0];
             const float3& world_b = tri.world_vertices[1];
             const float3& world_c = tri.world_vertices[2];
-            if (tri.mesher == mesher_choice::greedy || tri.mesher == mesher_choice::naive) {
+            const bool use_greedy_wireframe = tri.mesher == mesher_choice::greedy
+                && is_axis_aligned_normal(tri.normal);
+            if (use_greedy_wireframe) {
                 add_greedy_edge(a, b, tri.normal, camera_a, camera_b, world_a, world_b);
                 add_greedy_edge(b, c, tri.normal, camera_b, camera_c, world_b, world_c);
                 add_greedy_edge(c, a, tri.normal, camera_c, camera_a, world_c, world_a);
