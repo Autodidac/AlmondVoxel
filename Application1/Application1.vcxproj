@@ -158,6 +158,10 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\examples\terrain_demo.cpp" />
+    <ClCompile Include="..\tests\chunk_tests.cpp" />
+    <ClCompile Include="..\tests\editing_tests.cpp" />
+    <ClCompile Include="..\tests\meshing_tests.cpp" />
+    <ClCompile Include="..\tests\serialization_tests.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
