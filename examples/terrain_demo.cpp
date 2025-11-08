@@ -555,6 +555,168 @@ struct lod_definition {
     int cell_size{1};
 };
 
+struct render_distance_profile {
+    std::array<lod_definition, 3> lods{};
+    float min_scale{0.4f};
+    float max_scale{1.0f};
+    float default_scale{0.7f};
+};
+
+render_distance_profile make_render_distance_profile(mesher_choice mesher, terrain_mode terrain) {
+    render_distance_profile profile{};
+    profile.lods = std::array<lod_definition, 3>{
+        lod_definition{0, 0.0f, 150.0f, 1},
+        lod_definition{1, 130.0f, 320.0f, 2},
+        lod_definition{2, 280.0f, 820.0f, 4},
+    };
+    profile.min_scale = 0.4f;
+    profile.max_scale = 1.0f;
+    profile.default_scale = 0.7f;
+
+    switch (mesher) {
+    case mesher_choice::naive:
+        profile.max_scale = 1.05f;
+        break;
+    case mesher_choice::greedy:
+        profile.max_scale = 0.95f;
+        profile.default_scale = 0.65f;
+        break;
+    case mesher_choice::marching:
+        profile.lods = std::array<lod_definition, 3>{
+            lod_definition{0, 0.0f, 110.0f, 1},
+            lod_definition{1, 90.0f, 220.0f, 2},
+            lod_definition{2, 200.0f, 620.0f, 4},
+        };
+        profile.min_scale = 0.45f;
+        profile.max_scale = 0.85f;
+        profile.default_scale = 0.6f;
+        break;
+    }
+
+    if (terrain == terrain_mode::classic) {
+        for (auto& lod : profile.lods) {
+            lod.min_distance *= 0.9f;
+            lod.max_distance *= 0.9f;
+        }
+        profile.max_scale = std::min(profile.max_scale, 0.9f);
+        profile.default_scale = std::max(profile.min_scale, profile.default_scale - 0.05f);
+    }
+
+    return profile;
+}
+
+struct chunk_candidate {
+    region_key region{};
+    std::array<std::int64_t, 3> origin{};
+    double distance{};
+};
+
+std::size_t chunk_build_budget(mesher_choice mode) {
+    switch (mode) {
+    case mesher_choice::marching:
+        return 6;
+    case mesher_choice::greedy:
+        return 10;
+    case mesher_choice::naive:
+    default:
+        return 12;
+    }
+}
+
+std::span<const chunk_candidate> gather_chunk_candidates(const camera& cam, const chunk_extent& extent,
+    const lod_definition& lod, double clamped_scale) {
+    thread_local std::vector<chunk_candidate> candidates;
+    candidates.clear();
+
+    const double chunk_span_x = static_cast<double>(extent.x) * static_cast<double>(lod.cell_size);
+    const double chunk_span_y = static_cast<double>(extent.y) * static_cast<double>(lod.cell_size);
+    if (chunk_span_x <= 0.0 || chunk_span_y <= 0.0) {
+        return {candidates.data(), candidates.size()};
+    }
+
+    const double base_min_distance = std::max(static_cast<double>(lod.min_distance), 0.0);
+    const double scaled_max_distance_raw = static_cast<double>(lod.max_distance) * clamped_scale;
+    double scaled_max_distance = std::max(scaled_max_distance_raw, 0.0);
+    if (scaled_max_distance <= base_min_distance) {
+        if (base_min_distance <= 0.0) {
+            if (scaled_max_distance <= 0.0) {
+                return {candidates.data(), candidates.size()};
+            }
+        } else {
+            return {candidates.data(), candidates.size()};
+        }
+    }
+
+    const double scaled_min_distance = base_min_distance;
+    if (scaled_max_distance <= 0.0) {
+        return {candidates.data(), candidates.size()};
+    }
+
+    const int base_x = static_cast<int>(std::floor(static_cast<double>(cam.position.x) / chunk_span_x));
+    const int base_y = static_cast<int>(std::floor(static_cast<double>(cam.position.y) / chunk_span_y));
+    const double limiting_span = std::min(chunk_span_x, chunk_span_y);
+    if (limiting_span <= 0.0) {
+        return {candidates.data(), candidates.size()};
+    }
+
+    const int radius = static_cast<int>(std::ceil(scaled_max_distance / limiting_span)) + 1;
+    const int diameter = radius * 2 + 1;
+    const std::size_t required_capacity = static_cast<std::size_t>(diameter) * static_cast<std::size_t>(diameter);
+    if (candidates.capacity() < required_capacity) {
+        candidates.reserve(required_capacity);
+    }
+
+    int spiral_x = 0;
+    int spiral_y = 0;
+    int direction_x = 0;
+    int direction_y = -1;
+
+    const auto within_radius = [radius](int x, int y) {
+        return x >= -radius && x <= radius && y >= -radius && y <= radius;
+    };
+
+    const auto rotate_direction = [](int& dx, int& dy) {
+        const int temp = dx;
+        dx = -dy;
+        dy = temp;
+    };
+
+    for (int i = 0; i < diameter * diameter; ++i) {
+        if (within_radius(spiral_x, spiral_y)) {
+            region_key region{base_x + spiral_x, base_y + spiral_y, 0};
+            const std::array<std::int64_t, 3> origin{
+                static_cast<std::int64_t>(region.x) * static_cast<std::int64_t>(extent.x) * lod.cell_size,
+                static_cast<std::int64_t>(region.y) * static_cast<std::int64_t>(extent.y) * lod.cell_size,
+                static_cast<std::int64_t>(region.z) * static_cast<std::int64_t>(extent.z)
+            };
+
+            const double center_x = static_cast<double>(origin[0]) + chunk_span_x * 0.5;
+            const double center_y = static_cast<double>(origin[1]) + chunk_span_y * 0.5;
+            const double dx_world = center_x - static_cast<double>(cam.position.x);
+            const double dy_world = center_y - static_cast<double>(cam.position.y);
+            const double distance = std::sqrt(dx_world * dx_world + dy_world * dy_world);
+
+            if (distance >= scaled_min_distance && distance <= scaled_max_distance) {
+                candidates.push_back(chunk_candidate{region, origin, distance});
+            }
+        }
+
+        if (spiral_x == spiral_y || (spiral_x < 0 && spiral_x == -spiral_y)
+            || (spiral_x > 0 && spiral_x == 1 - spiral_y)) {
+            rotate_direction(direction_x, direction_y);
+        }
+
+        spiral_x += direction_x;
+        spiral_y += direction_y;
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const chunk_candidate& lhs, const chunk_candidate& rhs) {
+        return lhs.distance < rhs.distance;
+    });
+
+    return {candidates.data(), candidates.size()};
+}
+
 struct overlay_line_segment {
     SDL_FPoint start{};
     SDL_FPoint end{};
@@ -1860,100 +2022,13 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
     std::unordered_set<chunk_instance_key, chunk_instance_hash> needed;
     std::unordered_map<chunk_instance_key, std::array<std::int64_t, 3>, chunk_instance_hash> required_origins;
     std::unordered_map<chunk_instance_key, int, chunk_instance_hash> required_cell_sizes;
-    const std::size_t build_budget = mode == mesher_choice::marching ? 8 : 12;
+    const std::size_t build_budget = chunk_build_budget(mode);
     std::size_t enqueued_this_frame = 0;
     const terrain_mode terrain_setting = sampler ? sampler->mode : terrain_mode::smooth;
 
     const double clamped_scale = std::clamp(static_cast<double>(render_distance_scale), 0.0, 10.0);
-
-    struct chunk_candidate {
-        region_key region{};
-        std::array<std::int64_t, 3> origin{};
-        double distance{};
-    };
-
     for (const auto& lod : lods) {
-        const double chunk_span_x = static_cast<double>(extent.x) * static_cast<double>(lod.cell_size);
-        const double chunk_span_y = static_cast<double>(extent.y) * static_cast<double>(lod.cell_size);
-        if (chunk_span_x <= 0.0 || chunk_span_y <= 0.0) {
-            continue;
-        }
-
-        const double base_min_distance = std::max(static_cast<double>(lod.min_distance), 0.0);
-        const double scaled_max_distance_raw = static_cast<double>(lod.max_distance) * clamped_scale;
-        double scaled_max_distance = std::max(scaled_max_distance_raw, 0.0);
-        if (scaled_max_distance <= base_min_distance) {
-            if (base_min_distance <= 0.0) {
-                if (scaled_max_distance <= 0.0) {
-                    continue;
-                }
-            } else {
-                continue;
-            }
-        }
-
-        const double scaled_min_distance = base_min_distance;
-        if (scaled_max_distance <= 0.0) {
-            continue;
-        }
-
-        const int base_x = static_cast<int>(std::floor(static_cast<double>(cam.position.x) / chunk_span_x));
-        const int base_y = static_cast<int>(std::floor(static_cast<double>(cam.position.y) / chunk_span_y));
-        const double limiting_span = std::min(chunk_span_x, chunk_span_y);
-        const int radius = static_cast<int>(std::ceil(scaled_max_distance / limiting_span)) + 1;
-
-        const int diameter = radius * 2 + 1;
-        std::vector<chunk_candidate> chunk_candidates;
-        chunk_candidates.reserve(static_cast<std::size_t>(diameter) * static_cast<std::size_t>(diameter));
-
-        int spiral_x = 0;
-        int spiral_y = 0;
-        int direction_x = 0;
-        int direction_y = -1;
-
-        const auto within_radius = [radius](int x, int y) {
-            return x >= -radius && x <= radius && y >= -radius && y <= radius;
-        };
-
-        const auto rotate_direction = [](int& dx, int& dy) {
-            const int temp = dx;
-            dx = -dy;
-            dy = temp;
-        };
-
-        for (int i = 0; i < diameter * diameter; ++i) {
-            if (within_radius(spiral_x, spiral_y)) {
-                region_key region{base_x + spiral_x, base_y + spiral_y, 0};
-                const std::array<std::int64_t, 3> origin{
-                    static_cast<std::int64_t>(region.x) * static_cast<std::int64_t>(extent.x) * lod.cell_size,
-                    static_cast<std::int64_t>(region.y) * static_cast<std::int64_t>(extent.y) * lod.cell_size,
-                    static_cast<std::int64_t>(region.z) * static_cast<std::int64_t>(extent.z)
-                };
-
-                const double center_x = static_cast<double>(origin[0]) + chunk_span_x * 0.5;
-                const double center_y = static_cast<double>(origin[1]) + chunk_span_y * 0.5;
-                const double dx_world = center_x - static_cast<double>(cam.position.x);
-                const double dy_world = center_y - static_cast<double>(cam.position.y);
-                const double distance = std::sqrt(dx_world * dx_world + dy_world * dy_world);
-
-                if (distance >= scaled_min_distance && distance <= scaled_max_distance) {
-                    chunk_candidates.push_back(chunk_candidate{region, origin, distance});
-                }
-            }
-
-            if (spiral_x == spiral_y || (spiral_x < 0 && spiral_x == -spiral_y)
-                || (spiral_x > 0 && spiral_x == 1 - spiral_y)) {
-                rotate_direction(direction_x, direction_y);
-            }
-
-            spiral_x += direction_x;
-            spiral_y += direction_y;
-        }
-
-        std::sort(chunk_candidates.begin(), chunk_candidates.end(), [](const chunk_candidate& lhs, const chunk_candidate& rhs) {
-            return lhs.distance < rhs.distance;
-        });
-
+        const auto chunk_candidates = gather_chunk_candidates(cam, extent, lod, clamped_scale);
         for (const auto& candidate : chunk_candidates) {
             const chunk_instance_key key{candidate.region, lod.level};
             if (needed.insert(key).second) {
@@ -2149,11 +2224,6 @@ int main(int argc, char** argv) {
     const chunk_extent chunk_dimensions{32, 32, 96};
     auto sampler = std::make_shared<terrain_sampler>(terrain_setting, chunk_dimensions);
     auto voxel_edits = std::make_shared<voxel_edit_state>();
-    const std::array<lod_definition, 3> lods{
-        lod_definition{0, 0.0f, 200.0f, 1},
-        lod_definition{1, 180.0f, 480.0f, 2},
-        lod_definition{2, 440.0f, 1400.0f, 4},
-    };
 
     std::cout << "Starting terrain demo with " << demo_mode_description(mesher_mode, terrain_setting)
               << ". Press Alt+M to cycle demo presets";
@@ -2166,7 +2236,11 @@ int main(int argc, char** argv) {
     }
     std::cout << ". Left click removes voxels, right click places them."
               << " Press Space to jump and hold Shift to sprint. Use F3 to cycle debug overlays (wireframe, non-air, air-only).\n";
-    std::cout << "Render distance starts at the minimum setting. Adjust it with '[' and ']' as performance allows.\n";
+    std::cout << "Render distance tuned to "
+              << static_cast<int>(std::lround(render_distance_scale * 100.0f)) << "% of the baseline ("
+              << static_cast<int>(std::lround(min_render_distance_scale * 100.0f)) << "% - "
+              << static_cast<int>(std::lround(max_render_distance_scale * 100.0f)) << "% range)."
+              << " Adjust it with '[' and ']' as performance allows.\n";
     std::cout << "Debug overlay distance can be tuned independently with '-' and '='.\n";
 
     const float3 player_half_extents{player_radius, player_radius, player_half_height};
@@ -2181,6 +2255,24 @@ int main(int argc, char** argv) {
 
     std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash> chunk_meshes;
     chunk_build_dispatcher chunk_builder;
+
+    std::array<lod_definition, 3> lods{};
+    float min_render_distance_scale = 0.4f;
+    float max_render_distance_scale = 1.0f;
+    const float render_distance_step = 0.05f;
+    float render_distance_scale = 0.7f;
+
+    auto apply_render_profile = [&](bool reset_scale) {
+        const auto profile = make_render_distance_profile(mesher_mode, terrain_setting);
+        lods = profile.lods;
+        min_render_distance_scale = profile.min_scale;
+        max_render_distance_scale = profile.max_scale;
+        if (reset_scale) {
+            render_distance_scale = profile.default_scale;
+        } else {
+            render_distance_scale = std::clamp(render_distance_scale, min_render_distance_scale, max_render_distance_scale);
+        }
+    };
 
     auto sync_camera = [&]() {
         cam.position = add(player.position, float3{0.0f, 0.0f, player_eye_offset});
@@ -2211,10 +2303,15 @@ int main(int argc, char** argv) {
         sampler = std::make_shared<terrain_sampler>(terrain_setting, chunk_dimensions);
         chunk_meshes.clear();
         chunk_builder.clear();
+        apply_render_profile(true);
         align_player_height();
         if (announce) {
             std::cout << "Switched demo preset to (" << (demo_mode_index + 1) << "/" << demo_modes.size() << ") "
                       << demo_mode_description(entry.mesher, entry.terrain) << "\n";
+            std::cout << "Render distance scale reset to "
+                      << static_cast<int>(std::lround(render_distance_scale * 100.0f)) << "% ("
+                      << static_cast<int>(std::lround(min_render_distance_scale * 100.0f)) << "% - "
+                      << static_cast<int>(std::lround(max_render_distance_scale * 100.0f)) << "%)\n";
         }
     };
 
@@ -2230,11 +2327,6 @@ int main(int argc, char** argv) {
 
     std::optional<overlay_output> overlay_render_data;
     std::size_t overlay_generation = 0;
-
-    constexpr float min_render_distance_scale = 0.25f;
-    constexpr float max_render_distance_scale = 1.25f;
-    constexpr float render_distance_step = 0.05f;
-    float render_distance_scale = 1.0f;
 
     constexpr float min_overlay_distance_scale = 0.25f;
     constexpr float max_overlay_distance_scale = 1.25f;
