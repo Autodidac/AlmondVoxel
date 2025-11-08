@@ -2,6 +2,7 @@
 
 #include "almond_voxel/chunk.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -212,6 +213,7 @@ inline chunk_storage& region_manager::load_or_create(const region_key& key) {
 }
 
 inline void region_manager::touch(const region_key& key) {
+    std::erase(lru_, key);
     lru_.push_back(key);
 }
 
