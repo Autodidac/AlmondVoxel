@@ -619,88 +619,6 @@ overlay_output build_overlay_output(overlay_input input) {
     return output;
 }
 
-class debug_overlay_worker {
-public:
-    debug_overlay_worker()
-        : worker_{[this]() {
-            worker_loop();
-        }} {}
-
-    ~debug_overlay_worker() {
-        shutdown();
-    }
-
-    void submit(overlay_input input) {
-        std::unique_lock<std::mutex> lock{mutex_};
-        pending_input_ = std::move(input);
-        cv_.notify_one();
-    }
-
-    std::optional<overlay_output> try_consume() {
-        std::unique_lock<std::mutex> lock{mutex_};
-        if (!ready_output_.has_value()) {
-            return std::nullopt;
-        }
-        auto result = std::move(*ready_output_);
-        ready_output_.reset();
-        return result;
-    }
-
-    void clear_pending() {
-        std::unique_lock<std::mutex> lock{mutex_};
-        pending_input_.reset();
-        ready_output_.reset();
-    }
-
-private:
-    void worker_loop() {
-        while (true) {
-            overlay_input input{};
-            {
-                std::unique_lock<std::mutex> lock{mutex_};
-                cv_.wait(lock, [this]() {
-                    return stop_requested_ || pending_input_.has_value();
-                });
-
-                if (stop_requested_) {
-                    return;
-                }
-
-                input = std::move(*pending_input_);
-                pending_input_.reset();
-            }
-
-            auto output = build_overlay_output(std::move(input));
-
-            {
-                std::unique_lock<std::mutex> lock{mutex_};
-                ready_output_ = std::move(output);
-            }
-        }
-    }
-
-    void shutdown() {
-        {
-            std::unique_lock<std::mutex> lock{mutex_};
-            if (stop_requested_) {
-                return;
-            }
-            stop_requested_ = true;
-        }
-        cv_.notify_all();
-        if (worker_.joinable()) {
-            worker_.join();
-        }
-    }
-
-    std::mutex mutex_;
-    std::condition_variable cv_;
-    std::optional<overlay_input> pending_input_;
-    std::optional<overlay_output> ready_output_;
-    bool stop_requested_{false};
-    std::thread worker_;
-};
-
 double base_height_field(double x, double y) {
     const double large_scale = std::sin(x * 0.005) * 30.0 + std::cos(y * 0.005) * 28.0;
     const double medium_scale = std::sin(x * 0.04 + y * 0.03) * 12.0;
@@ -1544,8 +1462,20 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
             continue;
         }
 
-        const double scaled_min_distance = std::max(static_cast<double>(lod.min_distance) * clamped_scale, 0.0);
-        const double scaled_max_distance = std::max(static_cast<double>(lod.max_distance) * clamped_scale, 0.0);
+        const double base_min_distance = std::max(static_cast<double>(lod.min_distance), 0.0);
+        const double scaled_max_distance_raw = static_cast<double>(lod.max_distance) * clamped_scale;
+        double scaled_max_distance = std::max(scaled_max_distance_raw, 0.0);
+        if (scaled_max_distance <= base_min_distance) {
+            if (base_min_distance <= 0.0) {
+                if (scaled_max_distance <= 0.0) {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+        }
+
+        const double scaled_min_distance = base_min_distance;
         if (scaled_max_distance <= 0.0) {
             continue;
         }
@@ -1782,7 +1712,6 @@ int main(int argc, char** argv) {
 
     std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash> chunk_meshes;
     chunk_build_dispatcher chunk_builder;
-    debug_overlay_worker overlay_worker;
 
     std::optional<overlay_output> overlay_render_data;
     std::size_t overlay_generation = 0;
@@ -2151,14 +2080,9 @@ int main(int argc, char** argv) {
                 job.chunks.push_back(info);
             }
             job.generation = ++overlay_generation;
-            overlay_worker.submit(std::move(job));
+            overlay_render_data = build_overlay_output(std::move(job));
         } else {
-            overlay_worker.clear_pending();
             overlay_render_data.reset();
-        }
-
-        if (auto ready_overlay = overlay_worker.try_consume()) {
-            overlay_render_data = std::move(*ready_overlay);
         }
 
         if (overlay_render_data.has_value() && overlay_render_data->mode == debug_mode) {
