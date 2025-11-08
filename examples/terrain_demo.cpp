@@ -1241,14 +1241,14 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
     const terrain_mode terrain_setting = sampler ? sampler->mode : terrain_mode::smooth;
 
     for (const auto& lod : lods) {
-        const float chunk_size = static_cast<float>(extent.x * lod.cell_size);
-        if (chunk_size <= 0.0f) {
+        const double chunk_size = static_cast<double>(extent.x) * static_cast<double>(lod.cell_size);
+        if (chunk_size <= 0.0) {
             continue;
         }
 
-        const int base_x = static_cast<int>(std::floor(cam.position.x / chunk_size));
-        const int base_y = static_cast<int>(std::floor(cam.position.y / chunk_size));
-        const int radius = static_cast<int>(std::ceil(lod.max_distance / chunk_size)) + 1;
+        const int base_x = static_cast<int>(std::floor(static_cast<double>(cam.position.x) / chunk_size));
+        const int base_y = static_cast<int>(std::floor(static_cast<double>(cam.position.y) / chunk_size));
+        const int radius = static_cast<int>(std::ceil(static_cast<double>(lod.max_distance) / chunk_size)) + 1;
 
         for (int dy = -radius; dy <= radius; ++dy) {
             for (int dx = -radius; dx <= radius; ++dx) {
@@ -1259,13 +1259,14 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
                     static_cast<std::int64_t>(region.z) * static_cast<std::int64_t>(extent.z)
                 };
 
-                const float center_x = static_cast<float>(origin[0]) + chunk_size * 0.5f;
-                const float center_y = static_cast<float>(origin[1]) + chunk_size * 0.5f;
-                const float dx_world = center_x - cam.position.x;
-                const float dy_world = center_y - cam.position.y;
-                const float distance = std::sqrt(dx_world * dx_world + dy_world * dy_world);
+                const double center_x = static_cast<double>(origin[0]) + chunk_size * 0.5;
+                const double center_y = static_cast<double>(origin[1]) + chunk_size * 0.5;
+                const double dx_world = center_x - static_cast<double>(cam.position.x);
+                const double dy_world = center_y - static_cast<double>(cam.position.y);
+                const double distance = std::sqrt(dx_world * dx_world + dy_world * dy_world);
 
-                if (distance < lod.min_distance || distance > lod.max_distance) {
+                if (distance < static_cast<double>(lod.min_distance)
+                    || distance > static_cast<double>(lod.max_distance)) {
                     continue;
                 }
 
