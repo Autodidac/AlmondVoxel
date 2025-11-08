@@ -348,8 +348,9 @@ SDL_Vertex make_projected_vertex(const clip_vertex& vertex, const camera& cam, i
     const float aspect = safe_width / safe_height;
     const float f = 1.0f / std::tan(cam.fov * 0.5f);
 
-    const float ndc_x = (vertex.x * f / aspect) / vertex.z;
-    const float ndc_y = (vertex.y * f) / vertex.z;
+    const float clamped_z = std::max(vertex.z, cam.near_plane);
+    const float ndc_x = (vertex.x * f / aspect) / clamped_z;
+    const float ndc_y = (vertex.y * f) / clamped_z;
 
     result.position = SDL_FPoint{
         (ndc_x * 0.5f + 0.5f) * safe_width,
@@ -1756,7 +1757,7 @@ int main(int argc, char** argv) {
                     tri.vertices[0] = make_projected_vertex(v0, cam, output_width, output_height);
                     tri.vertices[1] = make_projected_vertex(v1, cam, output_width, output_height);
                     tri.vertices[2] = make_projected_vertex(v2, cam, output_width, output_height);
-                    tri.depth = std::max({v0.z, v1.z, v2.z});
+                    tri.depth = std::min({v0.z, v1.z, v2.z});
                     tri.region = key.region;
                     tri.lod = key.lod;
                     tri.sequence = triangle_index++;
