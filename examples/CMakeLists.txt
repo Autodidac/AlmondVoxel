@@ -15,15 +15,23 @@ target_compile_options(terrain_demo PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
 )
 
-add_executable(voxel_showcase voxel_showcase.cpp)
+add_executable(classic_heightfield_example classic_heightfield_example.cpp)
+target_link_libraries(classic_heightfield_example PRIVATE almond_voxel)
+target_compile_options(classic_heightfield_example PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
+    $<$<CXX_COMPILER_ID:MSVC>:/W4>
+)
 
-target_sources(voxel_showcase PRIVATE ${ALMOND_VOXEL_TEST_CASE_SOURCES})
+add_executable(greedy_mesher_example greedy_mesher_example.cpp)
+target_link_libraries(greedy_mesher_example PRIVATE almond_voxel)
+target_compile_options(greedy_mesher_example PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
+    $<$<CXX_COMPILER_ID:MSVC>:/W4>
+)
 
-target_link_libraries(voxel_showcase PRIVATE almond_voxel SDL3::SDL3)
-
-target_include_directories(voxel_showcase PRIVATE ${CMAKE_SOURCE_DIR}/tests)
-
-target_compile_options(voxel_showcase PRIVATE
+add_executable(marching_cubes_example marching_cubes_example.cpp)
+target_link_libraries(marching_cubes_example PRIVATE almond_voxel)
+target_compile_options(marching_cubes_example PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
 )
