@@ -959,12 +959,16 @@ overlay_output build_overlay_output(overlay_input input) {
     constexpr float overlay_depth_bias = 0.05f;
 
     if (input.mode == debug_display_mode::wireframe) {
-        const SDL_Color wire_color = input.terrain == terrain_mode::classic
+        const SDL_Color greedy_wire_color = input.terrain == terrain_mode::classic
             ? SDL_Color{255, 210, 150, 180}
             : SDL_Color{170, 230, 255, 170};
+        const SDL_Color default_wire_color{0, 0, 0, 200};
 
-        overlay_draw_group group{};
-        group.color = wire_color;
+        overlay_draw_group standard_group{};
+        standard_group.color = default_wire_color;
+
+        overlay_draw_group greedy_group{};
+        greedy_group.color = greedy_wire_color;
 
         struct wire_edge_key {
             std::array<std::int32_t, 2> a{};
@@ -1092,15 +1096,15 @@ overlay_output build_overlay_output(overlay_input input) {
             } else {
                 if (!segment_fully_occluded(camera_a, camera_b, a, b, input.cam,
                         input.output_width, input.output_height, depth_ptr, overlay_depth_bias)) {
-                    group.segments.push_back(overlay_line_segment{a, b});
+                    standard_group.segments.push_back(overlay_line_segment{a, b});
                 }
                 if (!segment_fully_occluded(camera_b, camera_c, b, c, input.cam,
                         input.output_width, input.output_height, depth_ptr, overlay_depth_bias)) {
-                    group.segments.push_back(overlay_line_segment{b, c});
+                    standard_group.segments.push_back(overlay_line_segment{b, c});
                 }
                 if (!segment_fully_occluded(camera_c, camera_a, c, a, input.cam,
                         input.output_width, input.output_height, depth_ptr, overlay_depth_bias)) {
-                    group.segments.push_back(overlay_line_segment{c, a});
+                    standard_group.segments.push_back(overlay_line_segment{c, a});
                 }
             }
         }
@@ -1114,11 +1118,14 @@ overlay_output build_overlay_output(overlay_input input) {
                     input.output_width, input.output_height, depth_ptr, overlay_depth_bias)) {
                 continue;
             }
-            group.segments.push_back(overlay_line_segment{edge.a, edge.b});
+            greedy_group.segments.push_back(overlay_line_segment{edge.a, edge.b});
         }
 
-        if (!group.segments.empty()) {
-            output.groups.push_back(std::move(group));
+        if (!standard_group.segments.empty()) {
+            output.groups.push_back(std::move(standard_group));
+        }
+        if (!greedy_group.segments.empty()) {
+            output.groups.push_back(std::move(greedy_group));
         }
         return output;
     }
