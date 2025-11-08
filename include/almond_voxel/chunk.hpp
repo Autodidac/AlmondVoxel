@@ -1,6 +1,7 @@
 #pragma once
 
 #include "almond_voxel/core.hpp"
+#include "almond_voxel/effects/effect_channels.hpp"
 #include "almond_voxel/material/voxel_material.hpp"
 
 #include <algorithm>
@@ -19,6 +20,7 @@ struct chunk_storage_config {
     chunk_extent extent{cubic_extent(32)};
     bool enable_materials{false};
     bool enable_high_precision_lighting{false};
+    effects::channel effect_channels{effects::channel::none};
 };
 
 class chunk_storage {
@@ -32,6 +34,9 @@ public:
         voxel_span<material_index> materials{};
         std::span<float> skylight_cache{};
         std::span<float> blocklight_cache{};
+        voxel_span<float> effect_density{};
+        voxel_span<effects::velocity_sample> effect_velocity{};
+        voxel_span<float> effect_lifetime{};
     };
     struct const_planes_view {
         voxel_cspan<voxel_id> voxels{};
@@ -41,6 +46,9 @@ public:
         std::span<const material_index> materials{};
         std::span<const float> skylight_cache{};
         std::span<const float> blocklight_cache{};
+        voxel_cspan<float> effect_density{};
+        voxel_cspan<effects::velocity_sample> effect_velocity{};
+        voxel_cspan<float> effect_lifetime{};
     };
     using compress_callback = std::function<byte_vector(const const_planes_view&)>;
     using decompress_callback = std::function<void(const planes_view&, std::span<const std::byte>)>;
@@ -77,6 +85,21 @@ public:
     [[nodiscard]] span3d<const float> skylight_cache() const;
     [[nodiscard]] span3d<float> blocklight_cache();
     [[nodiscard]] span3d<const float> blocklight_cache() const;
+
+    [[nodiscard]] effects::channel effect_channels() const noexcept { return effect_channels_; }
+    void set_effect_channels(effects::channel channels);
+    void enable_effect_channels(effects::channel channels);
+
+    [[nodiscard]] bool effect_density_enabled() const noexcept;
+    [[nodiscard]] bool effect_velocity_enabled() const noexcept;
+    [[nodiscard]] bool effect_lifetime_enabled() const noexcept;
+
+    [[nodiscard]] span3d<float> effect_density();
+    [[nodiscard]] span3d<const float> effect_density() const;
+    [[nodiscard]] span3d<effects::velocity_sample> effect_velocity();
+    [[nodiscard]] span3d<const effects::velocity_sample> effect_velocity() const;
+    [[nodiscard]] span3d<float> effect_lifetime();
+    [[nodiscard]] span3d<const float> effect_lifetime() const;
 
     void fill(voxel_id voxel, std::uint8_t sky_level = 0, std::uint8_t block_level = 0, std::uint8_t meta = 0,
         material_index material = invalid_material_index, float sky_cache = 0.0f, float block_cache = 0.0f);
@@ -116,9 +139,13 @@ private:
     std::vector<std::uint8_t> metadata_{};
     bool materials_enabled_{false};
     bool high_precision_lighting_enabled_{false};
+    effects::channel effect_channels_{effects::channel::none};
     std::vector<material_index> materials_{};
     std::vector<float> skylight_cache_{};
     std::vector<float> blocklight_cache_{};
+    std::vector<float> effect_density_{};
+    std::vector<effects::velocity_sample> effect_velocity_{};
+    std::vector<float> effect_lifetime_{};
 
     compress_callback compress_{};
     decompress_callback decompress_{};
@@ -138,7 +165,8 @@ inline chunk_storage::chunk_storage(chunk_extent extent)
 inline chunk_storage::chunk_storage(chunk_storage_config config)
     : extent_{config.extent}
     , materials_enabled_{config.enable_materials}
-    , high_precision_lighting_enabled_{config.enable_high_precision_lighting} {
+    , high_precision_lighting_enabled_{config.enable_high_precision_lighting}
+    , effect_channels_{config.effect_channels} {
     ensure_capacity();
 }
 
@@ -150,9 +178,13 @@ inline chunk_storage::chunk_storage(chunk_storage&& other) noexcept
     , metadata_{std::move(other.metadata_)}
     , materials_enabled_{other.materials_enabled_}
     , high_precision_lighting_enabled_{other.high_precision_lighting_enabled_}
+    , effect_channels_{other.effect_channels_}
     , materials_{std::move(other.materials_)}
     , skylight_cache_{std::move(other.skylight_cache_)}
     , blocklight_cache_{std::move(other.blocklight_cache_)}
+    , effect_density_{std::move(other.effect_density_)}
+    , effect_velocity_{std::move(other.effect_velocity_)}
+    , effect_lifetime_{std::move(other.effect_lifetime_)}
     , compress_{std::move(other.compress_)}
     , decompress_{std::move(other.decompress_)}
     , dirty_{other.dirty_}
@@ -163,9 +195,13 @@ inline chunk_storage::chunk_storage(chunk_storage&& other) noexcept
     other.extent_ = chunk_extent{};
     other.materials_enabled_ = false;
     other.high_precision_lighting_enabled_ = false;
+    other.effect_channels_ = effects::channel::none;
     other.materials_.clear();
     other.skylight_cache_.clear();
     other.blocklight_cache_.clear();
+    other.effect_density_.clear();
+    other.effect_velocity_.clear();
+    other.effect_lifetime_.clear();
     other.dirty_ = false;
     other.compression_requested_ = false;
     other.compressed_ = false;
@@ -182,9 +218,13 @@ inline chunk_storage& chunk_storage::operator=(chunk_storage&& other) noexcept {
         metadata_ = std::move(other.metadata_);
         materials_enabled_ = other.materials_enabled_;
         high_precision_lighting_enabled_ = other.high_precision_lighting_enabled_;
+        effect_channels_ = other.effect_channels_;
         materials_ = std::move(other.materials_);
         skylight_cache_ = std::move(other.skylight_cache_);
         blocklight_cache_ = std::move(other.blocklight_cache_);
+        effect_density_ = std::move(other.effect_density_);
+        effect_velocity_ = std::move(other.effect_velocity_);
+        effect_lifetime_ = std::move(other.effect_lifetime_);
         compress_ = std::move(other.compress_);
         decompress_ = std::move(other.decompress_);
         dirty_ = other.dirty_;
@@ -196,9 +236,13 @@ inline chunk_storage& chunk_storage::operator=(chunk_storage&& other) noexcept {
         other.extent_ = chunk_extent{};
         other.materials_enabled_ = false;
         other.high_precision_lighting_enabled_ = false;
+        other.effect_channels_ = effects::channel::none;
         other.materials_.clear();
         other.skylight_cache_.clear();
         other.blocklight_cache_.clear();
+        other.effect_density_.clear();
+        other.effect_velocity_.clear();
+        other.effect_lifetime_.clear();
         other.dirty_ = false;
         other.compression_requested_ = false;
         other.compressed_ = false;
@@ -327,6 +371,115 @@ inline span3d<const float> chunk_storage::blocklight_cache() const {
     return make_span3d(blocklight_cache_.data(), extent_);
 }
 
+inline bool chunk_storage::effect_density_enabled() const noexcept {
+    return effects::contains(effect_channels_, effects::channel::density);
+}
+
+inline bool chunk_storage::effect_velocity_enabled() const noexcept {
+    return effects::contains(effect_channels_, effects::channel::velocity);
+}
+
+inline bool chunk_storage::effect_lifetime_enabled() const noexcept {
+    return effects::contains(effect_channels_, effects::channel::lifetime);
+}
+
+inline void chunk_storage::set_effect_channels(effects::channel channels) {
+    ensure_decompressed();
+    if (effect_channels_ == channels) {
+        return;
+    }
+    const effects::channel previous = effect_channels_;
+    effect_channels_ = channels;
+    const auto count = extent_.volume();
+
+    if (effects::contains(channels, effects::channel::density)) {
+        if (!effects::contains(previous, effects::channel::density)) {
+            effect_density_.assign(count, 0.0f);
+        } else if (effect_density_.size() != count) {
+            effect_density_.resize(count, 0.0f);
+        }
+    } else {
+        effect_density_.clear();
+    }
+
+    if (effects::contains(channels, effects::channel::velocity)) {
+        if (!effects::contains(previous, effects::channel::velocity)) {
+            effect_velocity_.assign(count, effects::velocity_sample{});
+        } else if (effect_velocity_.size() != count) {
+            effect_velocity_.resize(count, effects::velocity_sample{});
+        }
+    } else {
+        effect_velocity_.clear();
+    }
+
+    if (effects::contains(channels, effects::channel::lifetime)) {
+        if (!effects::contains(previous, effects::channel::lifetime)) {
+            effect_lifetime_.assign(count, 0.0f);
+        } else if (effect_lifetime_.size() != count) {
+            effect_lifetime_.resize(count, 0.0f);
+        }
+    } else {
+        effect_lifetime_.clear();
+    }
+
+    mark_dirty();
+}
+
+inline void chunk_storage::enable_effect_channels(effects::channel channels) {
+    set_effect_channels(effect_channels_ | channels);
+}
+
+inline span3d<float> chunk_storage::effect_density() {
+    ensure_decompressed();
+    if (!effect_density_enabled()) {
+        throw std::logic_error("effect density channel is disabled");
+    }
+    mark_dirty();
+    return make_span3d(effect_density_.data(), extent_);
+}
+
+inline span3d<const float> chunk_storage::effect_density() const {
+    const_cast<chunk_storage*>(this)->ensure_decompressed();
+    if (!effect_density_enabled()) {
+        throw std::logic_error("effect density channel is disabled");
+    }
+    return make_span3d(effect_density_.data(), extent_);
+}
+
+inline span3d<effects::velocity_sample> chunk_storage::effect_velocity() {
+    ensure_decompressed();
+    if (!effect_velocity_enabled()) {
+        throw std::logic_error("effect velocity channel is disabled");
+    }
+    mark_dirty();
+    return make_span3d(effect_velocity_.data(), extent_);
+}
+
+inline span3d<const effects::velocity_sample> chunk_storage::effect_velocity() const {
+    const_cast<chunk_storage*>(this)->ensure_decompressed();
+    if (!effect_velocity_enabled()) {
+        throw std::logic_error("effect velocity channel is disabled");
+    }
+    return make_span3d(effect_velocity_.data(), extent_);
+}
+
+inline span3d<float> chunk_storage::effect_lifetime() {
+    ensure_decompressed();
+    if (!effect_lifetime_enabled()) {
+        throw std::logic_error("effect lifetime channel is disabled");
+    }
+    mark_dirty();
+    return make_span3d(effect_lifetime_.data(), extent_);
+}
+
+inline span3d<const float> chunk_storage::effect_lifetime() const {
+    const_cast<chunk_storage*>(this)->ensure_decompressed();
+    if (!effect_lifetime_enabled()) {
+        throw std::logic_error("effect lifetime channel is disabled");
+    }
+    return make_span3d(effect_lifetime_.data(), extent_);
+}
+
 inline void chunk_storage::fill(voxel_id voxel, std::uint8_t sky_level, std::uint8_t block_level, std::uint8_t meta,
     material_index material, float sky_cache, float block_cache) {
     ensure_decompressed();
@@ -340,6 +493,15 @@ inline void chunk_storage::fill(voxel_id voxel, std::uint8_t sky_level, std::uin
     if (high_precision_lighting_enabled_) {
         std::fill(skylight_cache_.begin(), skylight_cache_.end(), sky_cache);
         std::fill(blocklight_cache_.begin(), blocklight_cache_.end(), block_cache);
+    }
+    if (effect_density_enabled()) {
+        std::fill(effect_density_.begin(), effect_density_.end(), 0.0f);
+    }
+    if (effect_velocity_enabled()) {
+        std::fill(effect_velocity_.begin(), effect_velocity_.end(), effects::velocity_sample{});
+    }
+    if (effect_lifetime_enabled()) {
+        std::fill(effect_lifetime_.begin(), effect_lifetime_.end(), 0.0f);
     }
     mark_dirty();
 }
@@ -399,6 +561,21 @@ inline void chunk_storage::ensure_capacity() {
         skylight_cache_.clear();
         blocklight_cache_.clear();
     }
+    if (effect_density_enabled()) {
+        effect_density_.assign(count, 0.0f);
+    } else {
+        effect_density_.clear();
+    }
+    if (effect_velocity_enabled()) {
+        effect_velocity_.assign(count, effects::velocity_sample{});
+    } else {
+        effect_velocity_.clear();
+    }
+    if (effect_lifetime_enabled()) {
+        effect_lifetime_.assign(count, 0.0f);
+    } else {
+        effect_lifetime_.clear();
+    }
 }
 
 inline chunk_storage::planes_view chunk_storage::make_planes_view() noexcept {
@@ -413,6 +590,15 @@ inline chunk_storage::planes_view chunk_storage::make_planes_view() noexcept {
     if (high_precision_lighting_enabled_) {
         view.skylight_cache = make_span3d(skylight_cache_.data(), extent_).linear();
         view.blocklight_cache = make_span3d(blocklight_cache_.data(), extent_).linear();
+    }
+    if (effect_density_enabled()) {
+        view.effect_density = make_span3d(effect_density_.data(), extent_).linear();
+    }
+    if (effect_velocity_enabled()) {
+        view.effect_velocity = make_span3d(effect_velocity_.data(), extent_).linear();
+    }
+    if (effect_lifetime_enabled()) {
+        view.effect_lifetime = make_span3d(effect_lifetime_.data(), extent_).linear();
     }
     return view;
 }
@@ -429,6 +615,15 @@ inline chunk_storage::const_planes_view chunk_storage::make_const_planes_view() 
     if (high_precision_lighting_enabled_) {
         view.skylight_cache = make_span3d(skylight_cache_.data(), extent_).linear();
         view.blocklight_cache = make_span3d(blocklight_cache_.data(), extent_).linear();
+    }
+    if (effect_density_enabled()) {
+        view.effect_density = make_span3d(effect_density_.data(), extent_).linear();
+    }
+    if (effect_velocity_enabled()) {
+        view.effect_velocity = make_span3d(effect_velocity_.data(), extent_).linear();
+    }
+    if (effect_lifetime_enabled()) {
+        view.effect_lifetime = make_span3d(effect_lifetime_.data(), extent_).linear();
     }
     return view;
 }

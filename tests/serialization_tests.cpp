@@ -7,12 +7,14 @@
 #include <vector>
 
 using namespace almond::voxel;
+using namespace almond::voxel::effects;
 
 TEST_CASE(chunk_serialization_roundtrip) {
     chunk_storage_config config{};
     config.extent = cubic_extent(4);
     config.enable_materials = true;
     config.enable_high_precision_lighting = true;
+    config.effect_channels = effects::channel::density | effects::channel::velocity | effects::channel::lifetime;
     chunk_storage chunk{config};
     auto voxels = chunk.voxels();
     auto skylight = chunk.skylight();
@@ -21,6 +23,9 @@ TEST_CASE(chunk_serialization_roundtrip) {
     auto materials = chunk.materials();
     auto sky_cache = chunk.skylight_cache();
     auto block_cache = chunk.blocklight_cache();
+    auto effect_density = chunk.effect_density();
+    auto effect_velocity = chunk.effect_velocity();
+    auto effect_lifetime = chunk.effect_lifetime();
 
     for (std::uint32_t z = 0; z < 4; ++z) {
         for (std::uint32_t y = 0; y < 4; ++y) {
@@ -33,6 +38,10 @@ TEST_CASE(chunk_serialization_roundtrip) {
                 materials(x, y, z) = static_cast<material_index>((idx % 7) + 1);
                 sky_cache(x, y, z) = static_cast<float>(idx) * 0.125f;
                 block_cache(x, y, z) = static_cast<float>(idx) * 0.0625f;
+                effect_density(x, y, z) = static_cast<float>(idx) * 0.5f;
+                effect_velocity(x, y, z) = effects::velocity_sample{
+                    static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
+                effect_lifetime(x, y, z) = 5.0f - static_cast<float>(idx) * 0.1f;
             }
         }
     }
@@ -72,6 +81,24 @@ TEST_CASE(chunk_serialization_roundtrip) {
     const auto restored_block_cache = restored.blocklight_cache().linear();
     REQUIRE(std::equal(original_block_cache.begin(), original_block_cache.end(), restored_block_cache.begin(),
         restored_block_cache.end()));
+
+    const auto original_effect_density = chunk.effect_density().linear();
+    const auto restored_effect_density = restored.effect_density().linear();
+    REQUIRE(std::equal(original_effect_density.begin(), original_effect_density.end(),
+        restored_effect_density.begin(), restored_effect_density.end()));
+
+    const auto original_effect_velocity = chunk.effect_velocity().linear();
+    const auto restored_effect_velocity = restored.effect_velocity().linear();
+    REQUIRE(std::equal(original_effect_velocity.begin(), original_effect_velocity.end(),
+        restored_effect_velocity.begin(), restored_effect_velocity.end(),
+        [](const effects::velocity_sample& lhs, const effects::velocity_sample& rhs) {
+            return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
+        }));
+
+    const auto original_effect_lifetime = chunk.effect_lifetime().linear();
+    const auto restored_effect_lifetime = restored.effect_lifetime().linear();
+    REQUIRE(std::equal(original_effect_lifetime.begin(), original_effect_lifetime.end(),
+        restored_effect_lifetime.begin(), restored_effect_lifetime.end()));
 }
 
 TEST_CASE(chunk_legacy_payload_migration) {

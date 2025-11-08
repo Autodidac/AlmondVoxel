@@ -42,3 +42,10 @@ target_compile_options(navigation_example PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
 )
+
+add_executable(effects_headless_example effects_headless_example.cpp)
+target_link_libraries(effects_headless_example PRIVATE almond_voxel)
+target_compile_options(effects_headless_example PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
+    $<$<CXX_COMPILER_ID:MSVC>:/W4>
+)
