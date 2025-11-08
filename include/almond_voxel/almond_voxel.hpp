@@ -11,6 +11,7 @@
 #include "almond_voxel/meshing/greedy_mesher.hpp"
 #include "almond_voxel/meshing/marching_cubes.hpp"
 #include "almond_voxel/meshing/mesh_types.hpp"
+#include "almond_voxel/navigation/voxel_nav.hpp"
 #include "almond_voxel/serialization/region_io.hpp"
 #include "almond_voxel/terrain/classic.hpp"
 #include "almond_voxel/world.hpp"
