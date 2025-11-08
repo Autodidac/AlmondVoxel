@@ -391,6 +391,45 @@ struct lod_definition {
     int cell_size{1};
 };
 
+struct overlay_line_segment {
+    SDL_FPoint start{};
+    SDL_FPoint end{};
+};
+
+struct overlay_draw_group {
+    SDL_Color color{};
+    std::vector<overlay_line_segment> segments;
+};
+
+struct chunk_overlay_info {
+    float base_x{};
+    float base_y{};
+    float base_z{};
+    float width{};
+    float depth{};
+    float height{};
+    bool is_air{false};
+};
+
+struct overlay_input {
+    debug_display_mode mode{debug_display_mode::off};
+    terrain_mode terrain{terrain_mode::smooth};
+    camera cam{};
+    camera_vectors vectors{};
+    int output_width{0};
+    int output_height{0};
+    std::vector<projected_triangle> triangles;
+    std::vector<chunk_overlay_info> chunks;
+    std::size_t generation{0};
+};
+
+struct overlay_output {
+    debug_display_mode mode{debug_display_mode::off};
+    terrain_mode terrain{terrain_mode::smooth};
+    std::vector<overlay_draw_group> groups;
+    std::size_t generation{0};
+};
+
 constexpr std::array<std::pair<int, int>, 12> box_edges{std::to_array<std::pair<int, int>>({
     std::pair{0, 1},
     std::pair{1, 3},
@@ -405,6 +444,262 @@ constexpr std::array<std::pair<int, int>, 12> box_edges{std::to_array<std::pair<
     std::pair{2, 6},
     std::pair{3, 7},
 })};
+
+overlay_output build_overlay_output(overlay_input input) {
+    overlay_output output{};
+    output.mode = input.mode;
+    output.terrain = input.terrain;
+    output.generation = input.generation;
+
+    if (input.mode == debug_display_mode::off) {
+        return output;
+    }
+
+    if (input.mode == debug_display_mode::wireframe) {
+        const SDL_Color wire_color = input.terrain == terrain_mode::classic
+            ? SDL_Color{255, 210, 150, 180}
+            : SDL_Color{170, 230, 255, 170};
+
+        overlay_draw_group group{};
+        group.color = wire_color;
+
+        struct wire_edge_key {
+            std::array<std::int32_t, 2> a{};
+            std::array<std::int32_t, 2> b{};
+
+            [[nodiscard]] bool operator==(const wire_edge_key&) const noexcept = default;
+        };
+
+        struct wire_edge_hash {
+            [[nodiscard]] std::size_t operator()(const wire_edge_key& key) const noexcept {
+                std::size_t seed = std::hash<std::int32_t>{}(key.a[0]);
+                seed ^= std::hash<std::int32_t>{}(key.a[1]) + 0x9E3779B185EBCA87ull + (seed << 6) + (seed >> 2);
+                seed ^= std::hash<std::int32_t>{}(key.b[0]) + 0x9E3779B185EBCA87ull + (seed << 6) + (seed >> 2);
+                seed ^= std::hash<std::int32_t>{}(key.b[1]) + 0x9E3779B185EBCA87ull + (seed << 6) + (seed >> 2);
+                return seed;
+            }
+        };
+
+        struct wire_edge_value {
+            SDL_FPoint a{};
+            SDL_FPoint b{};
+            std::array<std::int32_t, 3> normal_key{};
+            std::uint32_t count{0};
+            bool coplanar_duplicate{false};
+        };
+
+        std::unordered_map<wire_edge_key, wire_edge_value, wire_edge_hash> greedy_edges;
+
+        const auto quantize_point = [](const SDL_FPoint& point) {
+            constexpr float scale = 1024.0f;
+            return std::array<std::int32_t, 2>{
+                static_cast<std::int32_t>(std::lround(point.x * scale)),
+                static_cast<std::int32_t>(std::lround(point.y * scale))
+            };
+        };
+
+        const auto quantize_normal = [](const float3& normal) {
+            constexpr float scale = 1024.0f;
+            return std::array<std::int32_t, 3>{
+                static_cast<std::int32_t>(std::lround(normal.x * scale)),
+                static_cast<std::int32_t>(std::lround(normal.y * scale)),
+                static_cast<std::int32_t>(std::lround(normal.z * scale))
+            };
+        };
+
+        const auto add_greedy_edge = [&](const SDL_FPoint& start, const SDL_FPoint& end, const float3& normal) {
+            auto quant_a = quantize_point(start);
+            auto quant_b = quantize_point(end);
+            if (quant_a == quant_b) {
+                return;
+            }
+
+            SDL_FPoint ordered_start = start;
+            SDL_FPoint ordered_end = end;
+            if (quant_a[0] > quant_b[0] || (quant_a[0] == quant_b[0] && quant_a[1] > quant_b[1])) {
+                std::swap(quant_a, quant_b);
+                std::swap(ordered_start, ordered_end);
+            }
+
+            const wire_edge_key key{quant_a, quant_b};
+            auto& entry = greedy_edges[key];
+            const auto normal_key = quantize_normal(normal);
+            if (entry.count == 0) {
+                entry.a = ordered_start;
+                entry.b = ordered_end;
+                entry.normal_key = normal_key;
+            } else if (entry.normal_key == normal_key) {
+                entry.coplanar_duplicate = true;
+            }
+            ++entry.count;
+        };
+
+        for (const auto& tri : input.triangles) {
+            const SDL_FPoint& a = tri.vertices[0].position;
+            const SDL_FPoint& b = tri.vertices[1].position;
+            const SDL_FPoint& c = tri.vertices[2].position;
+            if (tri.mesher == mesher_choice::greedy) {
+                add_greedy_edge(a, b, tri.normal);
+                add_greedy_edge(b, c, tri.normal);
+                add_greedy_edge(c, a, tri.normal);
+            } else {
+                group.segments.push_back(overlay_line_segment{a, b});
+                group.segments.push_back(overlay_line_segment{b, c});
+                group.segments.push_back(overlay_line_segment{c, a});
+            }
+        }
+
+        for (const auto& [key, edge] : greedy_edges) {
+            (void)key;
+            if (edge.coplanar_duplicate) {
+                continue;
+            }
+            group.segments.push_back(overlay_line_segment{edge.a, edge.b});
+        }
+
+        if (!group.segments.empty()) {
+            output.groups.push_back(std::move(group));
+        }
+        return output;
+    }
+
+    const SDL_Color mode_color = [&]() {
+        if (input.mode == debug_display_mode::solid_chunks) {
+            return input.terrain == terrain_mode::classic
+                ? SDL_Color{255, 220, 150, 110}
+                : SDL_Color{210, 235, 255, 90};
+        }
+        return input.terrain == terrain_mode::classic
+            ? SDL_Color{255, 185, 170, 125}
+            : SDL_Color{180, 195, 255, 130};
+    }();
+
+    overlay_draw_group group{};
+    group.color = mode_color;
+
+    for (const auto& chunk : input.chunks) {
+        const bool should_draw = (input.mode == debug_display_mode::solid_chunks) ? !chunk.is_air : chunk.is_air;
+        if (!should_draw) {
+            continue;
+        }
+
+        const std::array<float3, 8> corners{
+            float3{chunk.base_x, chunk.base_y, chunk.base_z},
+            float3{chunk.base_x + chunk.width, chunk.base_y, chunk.base_z},
+            float3{chunk.base_x, chunk.base_y + chunk.depth, chunk.base_z},
+            float3{chunk.base_x + chunk.width, chunk.base_y + chunk.depth, chunk.base_z},
+            float3{chunk.base_x, chunk.base_y, chunk.base_z + chunk.height},
+            float3{chunk.base_x + chunk.width, chunk.base_y, chunk.base_z + chunk.height},
+            float3{chunk.base_x, chunk.base_y + chunk.depth, chunk.base_z + chunk.height},
+            float3{chunk.base_x + chunk.width, chunk.base_y + chunk.depth, chunk.base_z + chunk.height},
+        };
+
+        std::array<SDL_FPoint, corners.size()> projected_points{};
+        std::array<bool, corners.size()> visibility{};
+
+        for (std::size_t i = 0; i < corners.size(); ++i) {
+            const projection_result projected = project_perspective(corners[i], input.cam, input.vectors,
+                input.output_width, input.output_height);
+            visibility[i] = projected.visible;
+            projected_points[i] = projected.point;
+        }
+
+        for (const auto& edge : box_edges) {
+            if (!visibility[edge.first] || !visibility[edge.second]) {
+                continue;
+            }
+            group.segments.push_back(overlay_line_segment{projected_points[edge.first], projected_points[edge.second]});
+        }
+    }
+
+    if (!group.segments.empty()) {
+        output.groups.push_back(std::move(group));
+    }
+
+    return output;
+}
+
+class debug_overlay_worker {
+public:
+    debug_overlay_worker()
+        : worker_{[this]() {
+            worker_loop();
+        }} {}
+
+    ~debug_overlay_worker() {
+        shutdown();
+    }
+
+    void submit(overlay_input input) {
+        std::unique_lock<std::mutex> lock{mutex_};
+        pending_input_ = std::move(input);
+        cv_.notify_one();
+    }
+
+    std::optional<overlay_output> try_consume() {
+        std::unique_lock<std::mutex> lock{mutex_};
+        if (!ready_output_.has_value()) {
+            return std::nullopt;
+        }
+        auto result = std::move(*ready_output_);
+        ready_output_.reset();
+        return result;
+    }
+
+    void clear_pending() {
+        std::unique_lock<std::mutex> lock{mutex_};
+        pending_input_.reset();
+        ready_output_.reset();
+    }
+
+private:
+    void worker_loop() {
+        while (true) {
+            overlay_input input{};
+            {
+                std::unique_lock<std::mutex> lock{mutex_};
+                cv_.wait(lock, [this]() {
+                    return stop_requested_ || pending_input_.has_value();
+                });
+
+                if (stop_requested_) {
+                    return;
+                }
+
+                input = std::move(*pending_input_);
+                pending_input_.reset();
+            }
+
+            auto output = build_overlay_output(std::move(input));
+
+            {
+                std::unique_lock<std::mutex> lock{mutex_};
+                ready_output_ = std::move(output);
+            }
+        }
+    }
+
+    void shutdown() {
+        {
+            std::unique_lock<std::mutex> lock{mutex_};
+            if (stop_requested_) {
+                return;
+            }
+            stop_requested_ = true;
+        }
+        cv_.notify_all();
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+    }
+
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::optional<overlay_input> pending_input_;
+    std::optional<overlay_output> ready_output_;
+    bool stop_requested_{false};
+    std::thread worker_;
+};
 
 double base_height_field(double x, double y) {
     const double large_scale = std::sin(x * 0.005) * 30.0 + std::cos(y * 0.005) * 28.0;
@@ -1229,7 +1524,7 @@ void chunk_build_dispatcher::worker_loop(std::stop_token stop_token) {
 }
 
 void update_required_chunks(const camera& cam, const chunk_extent& extent, const std::array<lod_definition, 3>& lods,
-    mesher_choice mode, const std::shared_ptr<const terrain_sampler>& sampler,
+    float render_distance_scale, mesher_choice mode, const std::shared_ptr<const terrain_sampler>& sampler,
     const std::shared_ptr<const voxel_edit_state>& edits,
     std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash>& cache,
     chunk_build_dispatcher& builder) {
@@ -1241,15 +1536,23 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
     std::size_t enqueued_this_frame = 0;
     const terrain_mode terrain_setting = sampler ? sampler->mode : terrain_mode::smooth;
 
+    const double clamped_scale = std::clamp(static_cast<double>(render_distance_scale), 0.0, 10.0);
+
     for (const auto& lod : lods) {
         const double chunk_size = static_cast<double>(extent.x) * static_cast<double>(lod.cell_size);
         if (chunk_size <= 0.0) {
             continue;
         }
 
+        const double scaled_min_distance = std::max(static_cast<double>(lod.min_distance) * clamped_scale, 0.0);
+        const double scaled_max_distance = std::max(static_cast<double>(lod.max_distance) * clamped_scale, 0.0);
+        if (scaled_max_distance <= 0.0) {
+            continue;
+        }
+
         const int base_x = static_cast<int>(std::floor(static_cast<double>(cam.position.x) / chunk_size));
         const int base_y = static_cast<int>(std::floor(static_cast<double>(cam.position.y) / chunk_size));
-        const int radius = static_cast<int>(std::ceil(static_cast<double>(lod.max_distance) / chunk_size)) + 1;
+        const int radius = static_cast<int>(std::ceil(scaled_max_distance / chunk_size)) + 1;
 
         for (int dy = -radius; dy <= radius; ++dy) {
             for (int dx = -radius; dx <= radius; ++dx) {
@@ -1266,8 +1569,7 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
                 const double dy_world = center_y - static_cast<double>(cam.position.y);
                 const double distance = std::sqrt(dx_world * dx_world + dy_world * dy_world);
 
-                if (distance < static_cast<double>(lod.min_distance)
-                    || distance > static_cast<double>(lod.max_distance)) {
+                if (distance < scaled_min_distance || distance > scaled_max_distance) {
                     continue;
                 }
 
@@ -1479,6 +1781,15 @@ int main(int argc, char** argv) {
 
     std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash> chunk_meshes;
     chunk_build_dispatcher chunk_builder;
+    debug_overlay_worker overlay_worker;
+
+    std::optional<overlay_output> overlay_render_data;
+    std::size_t overlay_generation = 0;
+
+    float render_distance_scale = 1.0f;
+    constexpr float min_render_distance_scale = 0.25f;
+    constexpr float max_render_distance_scale = 1.25f;
+    constexpr float render_distance_step = 0.05f;
 
     std::vector<projected_triangle> triangles;
     std::vector<SDL_Vertex> draw_vertices;
@@ -1518,6 +1829,21 @@ int main(int argc, char** argv) {
                     std::cout << "Switched terrain to "
                               << (terrain_setting == terrain_mode::smooth ? "smooth noise" : "classic heightfield") << "\n";
                     align_player_height();
+                } else if (event.key.key == SDLK_PLUS || event.key.key == SDLK_EQUALS || event.key.key == SDLK_KP_PLUS) {
+                    const float previous_scale = render_distance_scale;
+                    render_distance_scale = std::min(render_distance_scale + render_distance_step, max_render_distance_scale);
+                    if (render_distance_scale != previous_scale) {
+                        std::cout << "Render distance scale: "
+                                  << static_cast<int>(std::lround(render_distance_scale * 100.0f)) << "%\n";
+                    }
+                } else if (event.key.key == SDLK_MINUS || event.key.key == SDLK_UNDERSCORE
+                    || event.key.key == SDLK_KP_MINUS) {
+                    const float previous_scale = render_distance_scale;
+                    render_distance_scale = std::max(render_distance_scale - render_distance_step, min_render_distance_scale);
+                    if (render_distance_scale != previous_scale) {
+                        std::cout << "Render distance scale: "
+                                  << static_cast<int>(std::lround(render_distance_scale * 100.0f)) << "%\n";
+                    }
                 } else if (event.key.key == SDLK_SPACE) {
                     jump_requested = true;
                 }
@@ -1676,7 +2002,7 @@ int main(int argc, char** argv) {
 
         vectors = compute_camera_vectors(cam);
 
-        update_required_chunks(cam, chunk_dimensions, lods, mesher_mode, sampler, voxel_edits,
+        update_required_chunks(cam, chunk_dimensions, lods, render_distance_scale, mesher_mode, sampler, voxel_edits,
             chunk_meshes, chunk_builder);
 
         SDL_SetRenderDrawColor(renderer, 25, 25, 35, 255);
@@ -1802,168 +2128,46 @@ int main(int argc, char** argv) {
         }
 
         if (debug_mode != debug_display_mode::off) {
+            overlay_input job{};
+            job.mode = debug_mode;
+            job.terrain = terrain_setting;
+            job.cam = cam;
+            job.vectors = vectors;
+            job.output_width = output_width;
+            job.output_height = output_height;
+            job.triangles = triangles;
+            job.chunks.reserve(chunk_meshes.size());
+            for (const auto& [key, chunk] : chunk_meshes) {
+                (void)key;
+                chunk_overlay_info info{};
+                info.base_x = static_cast<float>(chunk.origin[0]);
+                info.base_y = static_cast<float>(chunk.origin[1]);
+                info.base_z = static_cast<float>(chunk.origin[2]);
+                info.width = static_cast<float>(chunk_dimensions.x * chunk.cell_size);
+                info.depth = static_cast<float>(chunk_dimensions.y * chunk.cell_size);
+                info.height = static_cast<float>(chunk_dimensions.z);
+                info.is_air = chunk.mesh.indices.empty();
+                job.chunks.push_back(info);
+            }
+            job.generation = ++overlay_generation;
+            overlay_worker.submit(std::move(job));
+        } else {
+            overlay_worker.clear_pending();
+            overlay_render_data.reset();
+        }
+
+        if (auto ready_overlay = overlay_worker.try_consume()) {
+            overlay_render_data = std::move(*ready_overlay);
+        }
+
+        if (overlay_render_data.has_value() && overlay_render_data->mode == debug_mode) {
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-
-            if (debug_mode == debug_display_mode::wireframe) {
-                const SDL_Color wire_color = terrain_setting == terrain_mode::classic
-                    ? SDL_Color{255, 210, 150, 180}
-                    : SDL_Color{170, 230, 255, 170};
-                SDL_SetRenderDrawColor(renderer, wire_color.r, wire_color.g, wire_color.b, wire_color.a);
-                struct wire_edge_key {
-                    std::array<std::int32_t, 2> a{};
-                    std::array<std::int32_t, 2> b{};
-
-                    [[nodiscard]] bool operator==(const wire_edge_key&) const noexcept = default;
-                };
-
-                struct wire_edge_hash {
-                    [[nodiscard]] std::size_t operator()(const wire_edge_key& key) const noexcept {
-                        std::size_t seed = std::hash<std::int32_t>{}(key.a[0]);
-                        seed ^= std::hash<std::int32_t>{}(key.a[1]) + 0x9E3779B185EBCA87ull + (seed << 6) + (seed >> 2);
-                        seed ^= std::hash<std::int32_t>{}(key.b[0]) + 0x9E3779B185EBCA87ull + (seed << 6) + (seed >> 2);
-                        seed ^= std::hash<std::int32_t>{}(key.b[1]) + 0x9E3779B185EBCA87ull + (seed << 6) + (seed >> 2);
-                        return seed;
-                    }
-                };
-
-                struct wire_edge_value {
-                    SDL_FPoint a{};
-                    SDL_FPoint b{};
-                    std::array<std::int32_t, 3> normal_key{};
-                    std::uint32_t count{0};
-                    bool coplanar_duplicate{false};
-                };
-
-                std::unordered_map<wire_edge_key, wire_edge_value, wire_edge_hash> greedy_edges;
-
-                const auto quantize_point = [](const SDL_FPoint& point) {
-                    constexpr float scale = 1024.0f;
-                    return std::array<std::int32_t, 2>{
-                        static_cast<std::int32_t>(std::lround(point.x * scale)),
-                        static_cast<std::int32_t>(std::lround(point.y * scale))
-                    };
-                };
-
-                const auto quantize_normal = [](const float3& normal) {
-                    constexpr float scale = 1024.0f;
-                    return std::array<std::int32_t, 3>{
-                        static_cast<std::int32_t>(std::lround(normal.x * scale)),
-                        static_cast<std::int32_t>(std::lround(normal.y * scale)),
-                        static_cast<std::int32_t>(std::lround(normal.z * scale))
-                    };
-                };
-
-                const auto add_greedy_edge = [&](const SDL_FPoint& start, const SDL_FPoint& end, const float3& normal) {
-                    auto quant_a = quantize_point(start);
-                    auto quant_b = quantize_point(end);
-                    if (quant_a == quant_b) {
-                        return;
-                    }
-
-                    SDL_FPoint ordered_start = start;
-                    SDL_FPoint ordered_end = end;
-                    if (quant_a[0] > quant_b[0] || (quant_a[0] == quant_b[0] && quant_a[1] > quant_b[1])) {
-                        std::swap(quant_a, quant_b);
-                        std::swap(ordered_start, ordered_end);
-                    }
-
-                    const wire_edge_key key{quant_a, quant_b};
-                    auto& entry = greedy_edges[key];
-                    const auto normal_key = quantize_normal(normal);
-                    if (entry.count == 0) {
-                        entry.a = ordered_start;
-                        entry.b = ordered_end;
-                        entry.normal_key = normal_key;
-                    } else if (entry.normal_key == normal_key) {
-                        entry.coplanar_duplicate = true;
-                    }
-                    ++entry.count;
-                };
-
-                for (const auto& tri : triangles) {
-                    const SDL_FPoint& a = tri.vertices[0].position;
-                    const SDL_FPoint& b = tri.vertices[1].position;
-                    const SDL_FPoint& c = tri.vertices[2].position;
-                    if (tri.mesher == mesher_choice::greedy) {
-                        add_greedy_edge(a, b, tri.normal);
-                        add_greedy_edge(b, c, tri.normal);
-                        add_greedy_edge(c, a, tri.normal);
-                    } else {
-                        SDL_RenderLine(renderer, a.x, a.y, b.x, b.y);
-                        SDL_RenderLine(renderer, b.x, b.y, c.x, c.y);
-                        SDL_RenderLine(renderer, c.x, c.y, a.x, a.y);
-                    }
-                }
-
-                for (const auto& [key, edge] : greedy_edges) {
-                    (void)key;
-                    if (edge.coplanar_duplicate) {
-                        continue;
-                    }
-                    SDL_RenderLine(renderer, edge.a.x, edge.a.y, edge.b.x, edge.b.y);
-                }
-            } else {
-                const auto mode_color = [&]() {
-                    if (debug_mode == debug_display_mode::solid_chunks) {
-                        return terrain_setting == terrain_mode::classic
-                            ? SDL_Color{255, 220, 150, 110}
-                            : SDL_Color{210, 235, 255, 90};
-                    }
-                    return terrain_setting == terrain_mode::classic
-                        ? SDL_Color{255, 185, 170, 125}
-                        : SDL_Color{180, 195, 255, 130};
-                }();
-                SDL_SetRenderDrawColor(renderer, mode_color.r, mode_color.g, mode_color.b, mode_color.a);
-
-                for (const auto& [key, chunk] : chunk_meshes) {
-                    (void)key;
-                    const bool is_air_chunk = chunk.mesh.indices.empty();
-                    const bool should_draw = (debug_mode == debug_display_mode::solid_chunks) ? !is_air_chunk : is_air_chunk;
-
-                    if (!should_draw) {
-                        continue;
-                    }
-
-                    const float base_x = static_cast<float>(chunk.origin[0]);
-                    const float base_y = static_cast<float>(chunk.origin[1]);
-                    const float base_z = static_cast<float>(chunk.origin[2]);
-                    const float width = static_cast<float>(chunk_dimensions.x * chunk.cell_size);
-                    const float depth = static_cast<float>(chunk_dimensions.y * chunk.cell_size);
-                    const float height = static_cast<float>(chunk_dimensions.z);
-
-                    const std::array<float3, 8> corners{
-                        float3{base_x, base_y, base_z},
-                        float3{base_x + width, base_y, base_z},
-                        float3{base_x, base_y + depth, base_z},
-                        float3{base_x + width, base_y + depth, base_z},
-                        float3{base_x, base_y, base_z + height},
-                        float3{base_x + width, base_y, base_z + height},
-                        float3{base_x, base_y + depth, base_z + height},
-                        float3{base_x + width, base_y + depth, base_z + height},
-                    };
-
-                    std::array<SDL_FPoint, corners.size()> projected_points{};
-                    std::array<bool, corners.size()> visibility{};
-
-                    for (std::size_t i = 0; i < corners.size(); ++i) {
-                        const projection_result projected = project_perspective(corners[i], cam, vectors, output_width, output_height);
-                        visibility[i] = projected.visible;
-                        projected_points[i] = projected.point;
-                    }
-
-                    for (const auto& edge : box_edges) {
-                        if (!visibility[edge.first] || !visibility[edge.second]) {
-                            continue;
-                        }
-                        SDL_RenderLine(renderer,
-                            projected_points[edge.first].x,
-                            projected_points[edge.first].y,
-                            projected_points[edge.second].x,
-                            projected_points[edge.second].y);
-                    }
+            for (const auto& group : overlay_render_data->groups) {
+                SDL_SetRenderDrawColor(renderer, group.color.r, group.color.g, group.color.b, group.color.a);
+                for (const auto& segment : group.segments) {
+                    SDL_RenderLine(renderer, segment.start.x, segment.start.y, segment.end.x, segment.end.y);
                 }
             }
-
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
         }
 
