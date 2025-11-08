@@ -1077,6 +1077,29 @@ overlay_output build_overlay_output(overlay_input input) {
             return other_sum < 1e-3f;
         };
 
+        const auto should_draw_edge = [](mesher_choice mesher, const float3& world_start, const float3& world_end) {
+            if (mesher != mesher_choice::naive) {
+                return true;
+            }
+
+            const float dx = std::abs(world_start.x - world_end.x);
+            const float dy = std::abs(world_start.y - world_end.y);
+            const float dz = std::abs(world_start.z - world_end.z);
+
+            int non_zero_axes = 0;
+            if (dx > 1e-4f) {
+                ++non_zero_axes;
+            }
+            if (dy > 1e-4f) {
+                ++non_zero_axes;
+            }
+            if (dz > 1e-4f) {
+                ++non_zero_axes;
+            }
+
+            return non_zero_axes <= 1;
+        };
+
         for (const auto& tri : input.triangles) {
             const SDL_FPoint& a = tri.vertices[0].position;
             const SDL_FPoint& b = tri.vertices[1].position;
@@ -1094,15 +1117,18 @@ overlay_output build_overlay_output(overlay_input input) {
                 add_greedy_edge(b, c, tri.normal, camera_b, camera_c, world_b, world_c);
                 add_greedy_edge(c, a, tri.normal, camera_c, camera_a, world_c, world_a);
             } else {
-                if (!segment_fully_occluded(camera_a, camera_b, a, b, input.cam,
+                if (should_draw_edge(tri.mesher, world_a, world_b)
+                    && !segment_fully_occluded(camera_a, camera_b, a, b, input.cam,
                         input.output_width, input.output_height, depth_ptr, overlay_depth_bias)) {
                     standard_group.segments.push_back(overlay_line_segment{a, b});
                 }
-                if (!segment_fully_occluded(camera_b, camera_c, b, c, input.cam,
+                if (should_draw_edge(tri.mesher, world_b, world_c)
+                    && !segment_fully_occluded(camera_b, camera_c, b, c, input.cam,
                         input.output_width, input.output_height, depth_ptr, overlay_depth_bias)) {
                     standard_group.segments.push_back(overlay_line_segment{b, c});
                 }
-                if (!segment_fully_occluded(camera_c, camera_a, c, a, input.cam,
+                if (should_draw_edge(tri.mesher, world_c, world_a)
+                    && !segment_fully_occluded(camera_c, camera_a, c, a, input.cam,
                         input.output_width, input.output_height, depth_ptr, overlay_depth_bias)) {
                     standard_group.segments.push_back(overlay_line_segment{c, a});
                 }
