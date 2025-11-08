@@ -44,6 +44,46 @@ enum class terrain_mode {
     classic
 };
 
+enum class debug_display_mode {
+    off,
+    no_air_chunks,
+    air_only,
+    marching_chunks,
+    classic_terrain
+};
+
+constexpr std::string_view debug_mode_name(debug_display_mode mode) {
+    switch (mode) {
+    case debug_display_mode::off:
+        return "off";
+    case debug_display_mode::no_air_chunks:
+        return "non-air chunks";
+    case debug_display_mode::air_only:
+        return "air-only";
+    case debug_display_mode::marching_chunks:
+        return "marching mesher";
+    case debug_display_mode::classic_terrain:
+        return "classic terrain";
+    }
+    return "off";
+}
+
+constexpr debug_display_mode cycle_debug_mode(debug_display_mode mode) {
+    switch (mode) {
+    case debug_display_mode::off:
+        return debug_display_mode::no_air_chunks;
+    case debug_display_mode::no_air_chunks:
+        return debug_display_mode::air_only;
+    case debug_display_mode::air_only:
+        return debug_display_mode::marching_chunks;
+    case debug_display_mode::marching_chunks:
+        return debug_display_mode::classic_terrain;
+    case debug_display_mode::classic_terrain:
+        return debug_display_mode::off;
+    }
+    return debug_display_mode::off;
+}
+
 struct float3 {
     float x{};
     float y{};
@@ -1330,7 +1370,7 @@ int main(int argc, char** argv) {
               << " and "
               << (terrain_setting == terrain_mode::smooth ? "smooth noise terrain" : "classic heightfield terrain")
               << ". Toggle mesher with 'M' and terrain with 'T'. Left click removes voxels, right click places them."
-              << " Press Space to jump and hold Shift to sprint.\n";
+              << " Press Space to jump and hold Shift to sprint. Use F3 to cycle debug overlays (off, non-air, air-only, marching, classic).\n";
 
     const float3 player_half_extents{player_radius, player_radius, player_half_height};
     player_state player{};
@@ -1361,7 +1401,7 @@ int main(int argc, char** argv) {
     align_player_height();
 
     bool running = true;
-    bool debug_view = false;
+    debug_display_mode debug_mode = debug_display_mode::off;
     bool mouse_captured = true;
     std::uint64_t previous_ticks = SDL_GetTicks();
 
@@ -1387,7 +1427,8 @@ int main(int argc, char** argv) {
                 if (event.key.key == SDLK_ESCAPE) {
                     running = false;
                 } else if (event.key.key == SDLK_F3) {
-                    debug_view = !debug_view;
+                    debug_mode = cycle_debug_mode(debug_mode);
+                    std::cout << "Debug overlay: " << debug_mode_name(debug_mode) << "\n";
                 } else if (event.key.key == SDLK_F1) {
                     mouse_captured = !mouse_captured;
                     SDL_SetWindowRelativeMouseMode(window, mouse_captured ? true : false);
@@ -1619,7 +1660,7 @@ int main(int argc, char** argv) {
                     tri.vertices[0] = make_projected_vertex(v0, cam, output_width, output_height);
                     tri.vertices[1] = make_projected_vertex(v1, cam, output_width, output_height);
                     tri.vertices[2] = make_projected_vertex(v2, cam, output_width, output_height);
-                    tri.depth = (v0.z + v1.z + v2.z) / 3.0f;
+                    tri.depth = std::max({v0.z, v1.z, v2.z});
                     triangles.push_back(tri);
                 }
             }
@@ -1642,12 +1683,54 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (debug_view) {
+        if (debug_mode != debug_display_mode::off) {
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-            SDL_SetRenderDrawColor(renderer, 240, 240, 255, 80);
+
+            const auto mode_color = [&]() {
+                switch (debug_mode) {
+                case debug_display_mode::no_air_chunks:
+                    return SDL_Color{240, 240, 255, 80};
+                case debug_display_mode::air_only:
+                    return SDL_Color{255, 180, 180, 110};
+                case debug_display_mode::marching_chunks:
+                    return SDL_Color{170, 225, 255, 100};
+                case debug_display_mode::classic_terrain:
+                    return SDL_Color{255, 220, 150, 110};
+                case debug_display_mode::off:
+                    break;
+                }
+                return SDL_Color{240, 240, 255, 80};
+            }();
+            SDL_SetRenderDrawColor(renderer, mode_color.r, mode_color.g, mode_color.b, mode_color.a);
 
             for (const auto& [key, chunk] : chunk_meshes) {
                 (void)key;
+                const bool is_air_chunk = chunk.mesh.indices.empty();
+                const bool is_marching_chunk = chunk.mode == mesher_choice::marching;
+                const bool is_classic_chunk = chunk.terrain == terrain_mode::classic;
+
+                bool should_draw = false;
+                switch (debug_mode) {
+                case debug_display_mode::no_air_chunks:
+                    should_draw = !is_air_chunk;
+                    break;
+                case debug_display_mode::air_only:
+                    should_draw = is_air_chunk;
+                    break;
+                case debug_display_mode::marching_chunks:
+                    should_draw = is_marching_chunk;
+                    break;
+                case debug_display_mode::classic_terrain:
+                    should_draw = is_classic_chunk;
+                    break;
+                case debug_display_mode::off:
+                    break;
+                }
+
+                if (!should_draw) {
+                    continue;
+                }
+
                 const float base_x = static_cast<float>(chunk.origin[0]);
                 const float base_y = static_cast<float>(chunk.origin[1]);
                 const float base_z = static_cast<float>(chunk.origin[2]);
