@@ -69,6 +69,7 @@ Disable optional components during configuration if you do not need them:
 The `run.sh` helper searches common build folders for the requested binary:
 ```bash
 ./run.sh terrain_demo
+./run.sh cubic_naive_mesher_example
 ./run.sh greedy_mesher_example
 ./run.sh mesh_bench
 ```
@@ -81,7 +82,7 @@ cd Bin/Clang-Debug
 ctest --output-on-failure
 ```
 
-To run only headless components in CI or remote servers, disable the SDL3 demo during configuration and invoke `classic_heightfield_example`, `greedy_mesher_example`, `marching_cubes_example`, `mesh_bench`, and `almond_voxel_tests` manually.
+To run only headless components in CI or remote servers, disable the SDL3 demo during configuration and invoke `classic_heightfield_example`, `cubic_naive_mesher_example`, `greedy_mesher_example`, `marching_cubes_example`, `mesh_bench`, and `almond_voxel_tests` manually.
 
 ## Performance considerations
 - Export `CXXFLAGS="-O3 -march=native"` (or `-mcpu=native` on Apple Silicon) before configuring to enable CPU-specific optimisations.

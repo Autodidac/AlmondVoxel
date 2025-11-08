@@ -154,6 +154,7 @@ The repository provides runnable targets that exercise different parts of the li
 | --- | --- |
 | `terrain_demo` | SDL3-powered viewport that streams regions, applies editing brushes, and renders greedy meshes. |
 | `classic_heightfield_example` | Console sample that generates a simple height map and prints summary metrics. |
+| `cubic_naive_mesher_example` | Emits all visible cube faces without merging to showcase the baseline meshing path. |
 | `greedy_mesher_example` | Demonstrates greedy mesh extraction for a procedurally generated chunk. |
 | `marching_cubes_example` | Extracts a smooth mesh from noise-populated data. |
 | `mesh_bench` | Command-line benchmark measuring greedy meshing throughput. |
@@ -161,6 +162,7 @@ The repository provides runnable targets that exercise different parts of the li
 Use `run.sh` to search common build directories and launch a binary:
 ```bash
 ./run.sh terrain_demo
+./run.sh cubic_naive_mesher_example
 ./run.sh greedy_mesher_example
 ```
 On Windows PowerShell, invoke the script through `bash` (included with Git for Windows):
@@ -193,7 +195,7 @@ ctest --output-on-failure
 ## Cross-platform notes
 - **Linux & macOS** – install a C++20 compiler (GCC 12+/Clang 15+), CMake 3.23+, Ninja (optional), and SDL3 development headers for the terrain demo (`libsdl3-dev` on Debian/Ubuntu, `brew install sdl3` on macOS).
 - **Windows** – use Visual Studio 2022 or the MSVC Build Tools with CMake/Ninja. SDL3 binaries can be supplied via [vcpkg](https://github.com/microsoft/vcpkg) (`vcpkg install sdl3`) or the official development packages. Invoke the scripts from *x64 Native Tools* or *Developer PowerShell* so the compiler is on `PATH`.
-- **Headless environments** – build `classic_heightfield_example`, `greedy_mesher_example`, `marching_cubes_example`, `mesh_bench`, and `almond_voxel_tests`. The SDL3-based `terrain_demo` can be skipped by setting `-DALMOND_VOXEL_BUILD_EXAMPLES=OFF` or by disabling SDL3 discovery.
+- **Headless environments** – build `classic_heightfield_example`, `cubic_naive_mesher_example`, `greedy_mesher_example`, `marching_cubes_example`, `mesh_bench`, and `almond_voxel_tests`. The SDL3-based `terrain_demo` can be skipped by setting `-DALMOND_VOXEL_BUILD_EXAMPLES=OFF` or by disabling SDL3 discovery.
 
 ## Documentation map
 - [docs/api-overview.md](docs/api-overview.md) – module-by-module reference with example snippets.

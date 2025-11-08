@@ -22,6 +22,13 @@ target_compile_options(classic_heightfield_example PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
 )
 
+add_executable(cubic_naive_mesher_example cubic_naive_mesher_example.cpp)
+target_link_libraries(cubic_naive_mesher_example PRIVATE almond_voxel)
+target_compile_options(cubic_naive_mesher_example PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
+    $<$<CXX_COMPILER_ID:MSVC>:/W4>
+)
+
 add_executable(greedy_mesher_example greedy_mesher_example.cpp)
 target_link_libraries(greedy_mesher_example PRIVATE almond_voxel)
 target_compile_options(greedy_mesher_example PRIVATE

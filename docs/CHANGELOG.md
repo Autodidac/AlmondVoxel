@@ -12,7 +12,7 @@ All notable changes to AlmondVoxel are documented here. The format follows [Keep
 ### Added
 - Initial header-only voxel toolkit covering core math, chunk storage, region streaming, terrain sampling, meshing, serialization, and editing helpers.
 - CMake interface target `almond_voxel` with options to build examples, tests, and benchmarks.
-- Runnable demos: `terrain_demo`, `classic_heightfield_example`, `greedy_mesher_example`, and `marching_cubes_example`.
+- Runnable demos: `terrain_demo`, `classic_heightfield_example`, `cubic_naive_mesher_example`, `greedy_mesher_example`, and `marching_cubes_example`.
 - Benchmark target `mesh_bench` for greedy meshing throughput measurements.
 - `almond_voxel_tests` executable aggregating all unit tests.
 - Helper scripts (`cmake/configure.sh`, `build.sh`, `install.sh`, `run.sh`) for consistent workflows on Linux, macOS, and Windows.
