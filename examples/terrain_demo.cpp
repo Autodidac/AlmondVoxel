@@ -509,17 +509,6 @@ struct voxel_edit_state {
     return std::nullopt;
 }
 
-[[nodiscard]] bool voxel_is_solid(const terrain_sampler& sampler, const voxel_edit_state* edits,
-    std::int64_t world_x, std::int64_t world_y, std::int64_t world_z, bool use_heightfield = false) {
-    if (auto override_id = find_override(edits, world_x, world_y, world_z)) {
-        return *override_id != voxel_id{};
-    }
-    if (use_heightfield) {
-        return heightfield_cell_contains_solid(world_x, world_y, world_z, sampler);
-    }
-    return sampler.voxel_at(world_x, world_y, world_z) != voxel_id{};
-}
-
 [[nodiscard]] bool heightfield_cell_contains_solid(std::int64_t world_x, std::int64_t world_y,
     std::int64_t world_z, const terrain_sampler& sampler) {
     for (int dz = 0; dz <= 1; ++dz) {
@@ -536,6 +525,17 @@ struct voxel_edit_state {
         }
     }
     return false;
+}
+
+[[nodiscard]] bool voxel_is_solid(const terrain_sampler& sampler, const voxel_edit_state* edits,
+    std::int64_t world_x, std::int64_t world_y, std::int64_t world_z, bool use_heightfield = false) {
+    if (auto override_id = find_override(edits, world_x, world_y, world_z)) {
+        return *override_id != voxel_id{};
+    }
+    if (use_heightfield) {
+        return heightfield_cell_contains_solid(world_x, world_y, world_z, sampler);
+    }
+    return sampler.voxel_at(world_x, world_y, world_z) != voxel_id{};
 }
 
 [[nodiscard]] bool box_intersects_voxels(const float3& center, const float3& half_extents,
