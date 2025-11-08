@@ -145,6 +145,12 @@ template <typename IsOpaque, typename NeighborOpaque>
                     const auto normal_i = face_normal(face);
                     const std::array<float, 3> normal{static_cast<float>(normal_i[0]), static_cast<float>(normal_i[1]), static_cast<float>(normal_i[2])};
 
+                    constexpr float face_bias = 0.0005f;
+                    const float face_offset = -face_bias * static_cast<float>(sign);
+                    for (auto& corner : corners) {
+                        corner[axis] += face_offset;
+                    }
+
                     const auto base_index = static_cast<std::uint32_t>(result.vertices.size());
                     for (std::size_t i = 0; i < 4; ++i) {
                         result.vertices.push_back(vertex{corners[i], normal, uv[i], cell.id});
