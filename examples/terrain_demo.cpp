@@ -14,15 +14,19 @@
 #include <cstddef>
 #include <cstdint>
 #include <condition_variable>
+#include <cctype>
+#include <cstdio>
+#include <initializer_list>
 #include <deque>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
-#include <shared_mutex>
-#include <limits>
 #include <optional>
+#include <shared_mutex>
 #include <stop_token>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
@@ -98,6 +102,117 @@ struct float3 {
     float y{};
     float z{};
 };
+
+constexpr int bitmap_font_width = 4;
+constexpr int bitmap_font_height = 6;
+constexpr int bitmap_font_spacing = 1;
+
+struct bitmap_font_glyph {
+    std::array<std::uint8_t, bitmap_font_height> rows{};
+};
+
+constexpr bitmap_font_glyph make_glyph(std::initializer_list<const char*> rows) {
+    bitmap_font_glyph glyph{};
+    std::size_t index = 0;
+    for (const char* row : rows) {
+        std::uint8_t bits = 0;
+        for (int column = 0; column < bitmap_font_width && row[column] != '\0'; ++column) {
+            bits <<= 1;
+            bits |= static_cast<std::uint8_t>(row[column] == '#');
+        }
+        bits <<= (bitmap_font_width - 4);
+        if (index < glyph.rows.size()) {
+            glyph.rows[index++] = bits;
+        }
+    }
+    return glyph;
+}
+
+struct bitmap_font_entry {
+    char character;
+    bitmap_font_glyph glyph;
+};
+
+constexpr bitmap_font_entry bitmap_font_table[] = {
+    {'0', make_glyph({" ## ", "#  #", "#  #", "#  #", "#  #", " ## "})},
+    {'1', make_glyph({"  # ", " ## ", "  # ", "  # ", "  # ", " ###"})},
+    {'2', make_glyph({" ## ", "#  #", "   #", "  # ", " #  ", "####"})},
+    {'3', make_glyph({"####", "   #", " ###", "   #", "#  #", " ## "})},
+    {'4', make_glyph({"#  #", "#  #", "#  #", "####", "   #", "   #"})},
+    {'5', make_glyph({"####", "#   ", "### ", "   #", "#  #", " ## "})},
+    {'6', make_glyph({" ## ", "#   ", "### ", "#  #", "#  #", " ## "})},
+    {'7', make_glyph({"####", "   #", "  # ", " #  ", "#   ", "#   "})},
+    {'8', make_glyph({" ## ", "#  #", " ## ", "#  #", "#  #", " ## "})},
+    {'9', make_glyph({" ## ", "#  #", "#  #", " ###", "   #", " ## "})},
+    {'F', make_glyph({"####", "#   ", "### ", "#   ", "#   ", "#   "})},
+    {'P', make_glyph({"### ", "#  #", "### ", "#   ", "#   ", "#   "})},
+    {'S', make_glyph({" ###", "#   ", " ## ", "   #", "   #", "### "})},
+    {':', make_glyph({"    ", " ## ", " ## ", "    ", " ## ", " ## "})},
+    {'.', make_glyph({"    ", "    ", "    ", "    ", " ## ", " ## "})}
+};
+
+const bitmap_font_glyph* find_bitmap_font_glyph(char character) {
+    for (const auto& entry : bitmap_font_table) {
+        if (entry.character == character) {
+            return &entry.glyph;
+        }
+    }
+    return nullptr;
+}
+
+int measure_bitmap_text(std::string_view text, int scale) {
+    int width = 0;
+    bool has_drawn = false;
+    for (char character : text) {
+        if (character == ' ') {
+            width += (bitmap_font_width + bitmap_font_spacing) * scale;
+            has_drawn = true;
+            continue;
+        }
+        const char upper = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+        if (find_bitmap_font_glyph(upper)) {
+            width += (bitmap_font_width + bitmap_font_spacing) * scale;
+            has_drawn = true;
+        }
+    }
+    if (has_drawn) {
+        width -= bitmap_font_spacing * scale;
+    }
+    return width;
+}
+
+void draw_bitmap_text(SDL_Renderer* renderer, std::string_view text, int x, int y, int scale, SDL_Color color) {
+    SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+    int cursor_x = x;
+    for (char character : text) {
+        if (character == ' ') {
+            cursor_x += (bitmap_font_width + bitmap_font_spacing) * scale;
+            continue;
+        }
+        const char upper = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+        const bitmap_font_glyph* glyph = find_bitmap_font_glyph(upper);
+        if (!glyph) {
+            cursor_x += (bitmap_font_width + bitmap_font_spacing) * scale;
+            continue;
+        }
+        for (int row = 0; row < bitmap_font_height; ++row) {
+            const std::uint8_t bits = glyph->rows[row];
+            for (int column = 0; column < bitmap_font_width; ++column) {
+                const std::uint8_t mask = static_cast<std::uint8_t>(1u << (bitmap_font_width - 1 - column));
+                if ((bits & mask) == 0) {
+                    continue;
+                }
+                SDL_FRect rect{};
+                rect.x = static_cast<float>(cursor_x + column * scale);
+                rect.y = static_cast<float>(y + row * scale);
+                rect.w = static_cast<float>(scale);
+                rect.h = static_cast<float>(scale);
+                SDL_RenderFillRect(renderer, &rect);
+            }
+        }
+        cursor_x += (bitmap_font_width + bitmap_font_spacing) * scale;
+    }
+}
 
 float3 to_float3(const std::array<float, 3>& values) {
     return float3{values[0], values[1], values[2]};
@@ -1918,6 +2033,9 @@ int main(int argc, char** argv) {
     debug_display_mode debug_mode = debug_display_mode::off;
     bool mouse_captured = true;
     std::uint64_t previous_ticks = SDL_GetTicks();
+    std::uint64_t fps_sample_start = previous_ticks;
+    int fps_frame_count = 0;
+    float displayed_fps = 0.0f;
 
     std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash> chunk_meshes;
     chunk_build_dispatcher chunk_builder;
@@ -2053,6 +2171,16 @@ int main(int argc, char** argv) {
         const std::uint64_t current_ticks = SDL_GetTicks();
         const float delta_seconds = static_cast<float>(current_ticks - previous_ticks) / 1000.0f;
         previous_ticks = current_ticks;
+
+        ++fps_frame_count;
+        const std::uint64_t fps_elapsed = current_ticks - fps_sample_start;
+        if (fps_elapsed >= 250) {
+            if (fps_elapsed > 0) {
+                displayed_fps = static_cast<float>(fps_frame_count) * 1000.0f / static_cast<float>(fps_elapsed);
+            }
+            fps_frame_count = 0;
+            fps_sample_start = current_ticks;
+        }
 
         int output_width = 0;
         int output_height = 0;
@@ -2305,6 +2433,28 @@ int main(int argc, char** argv) {
                     SDL_RenderLine(renderer, segment.start.x, segment.start.y, segment.end.x, segment.end.y);
                 }
             }
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+        }
+
+        if (displayed_fps > 0.0f) {
+            constexpr int fps_scale = 3;
+            const std::string fps_text = [displayed_fps]() {
+                char buffer[32];
+                std::snprintf(buffer, sizeof(buffer), "FPS: %.1f", displayed_fps);
+                return std::string{buffer};
+            }();
+            const int text_width = measure_bitmap_text(fps_text, fps_scale);
+            const int text_height = bitmap_font_height * fps_scale;
+            const int padding = 4;
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+            SDL_FRect background{};
+            background.x = static_cast<float>(padding);
+            background.y = static_cast<float>(padding);
+            background.w = static_cast<float>(text_width + padding * 2);
+            background.h = static_cast<float>(text_height + padding * 2);
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 160);
+            SDL_RenderFillRect(renderer, &background);
+            draw_bitmap_text(renderer, fps_text, padding + 1, padding + 1, fps_scale, SDL_Color{255, 255, 255, 255});
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
         }
 
