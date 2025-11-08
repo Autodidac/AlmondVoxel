@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "almond_voxel/material/voxel_material.hpp"
+
 namespace almond::voxel::terrain {
 
 struct classic_config {
@@ -22,6 +24,11 @@ struct classic_config {
     voxel_id bedrock_voxel{voxel_id{1}};
     std::uint32_t bedrock_layers{2};
     std::uint32_t surface_depth{4};
+    material_index surface_material{null_material_index};
+    material_index filler_material{null_material_index};
+    material_index subsurface_material{null_material_index};
+    material_index bedrock_material{null_material_index};
+    material_index air_material{null_material_index};
 };
 
 class classic_heightfield {
@@ -49,8 +56,12 @@ inline classic_heightfield::classic_heightfield(chunk_extent extent, classic_con
 }
 
 inline chunk_storage classic_heightfield::operator()(const region_key& key) const {
-    chunk_storage chunk{extent_};
+    chunk_storage_config chunk_config{};
+    chunk_config.extent = extent_;
+    chunk_config.enable_materials = true;
+    chunk_storage chunk{chunk_config};
     auto voxels = chunk.voxels();
+    auto materials = chunk.materials();
 
     const std::uint32_t size_x = extent_.x;
     const std::uint32_t size_y = extent_.y;
@@ -81,24 +92,30 @@ inline chunk_storage classic_heightfield::operator()(const region_key& key) cons
             for (std::uint32_t x = 0; x < size_x; ++x) {
                 const std::int32_t column_height = column_heights[row_offset + x];
                 auto& voxel = voxels(x, y, z);
+                auto& material = materials(x, y, z);
 
                 if (world_z < bedrock_limit) {
                     voxel = config_.bedrock_voxel;
+                    material = config_.bedrock_material;
                     continue;
                 }
 
                 if (world_z > column_height) {
                     voxel = voxel_id{};
+                    material = config_.air_material;
                     continue;
                 }
 
                 const std::int32_t depth = column_height - static_cast<std::int32_t>(world_z);
                 if (depth == 0) {
                     voxel = config_.surface_voxel;
+                    material = config_.surface_material;
                 } else if (depth <= static_cast<std::int32_t>(filler_depth)) {
                     voxel = config_.filler_voxel;
+                    material = config_.filler_material;
                 } else {
                     voxel = config_.subsurface_voxel;
+                    material = config_.subsurface_material;
                 }
             }
         }

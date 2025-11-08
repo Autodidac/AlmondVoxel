@@ -7,6 +7,7 @@
 #include "almond_voxel/core.hpp"
 #include "almond_voxel/editing/voxel_editing.hpp"
 #include "almond_voxel/generation/noise.hpp"
+#include "almond_voxel/material/voxel_material.hpp"
 #include "almond_voxel/meshing/greedy_mesher.hpp"
 #include "almond_voxel/meshing/marching_cubes.hpp"
 #include "almond_voxel/meshing/mesh_types.hpp"
