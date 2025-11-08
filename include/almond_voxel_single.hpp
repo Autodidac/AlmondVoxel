@@ -291,6 +291,7 @@ public:
     };
     using compress_callback = std::function<byte_vector(const const_planes_view&)>;
     using decompress_callback = std::function<void(const planes_view&, std::span<const std::byte>)>;
+    using dirty_listener = std::function<void()>;
 
     explicit chunk_storage(chunk_extent extent = cubic_extent(32));
     explicit chunk_storage(chunk_storage_config config);
@@ -342,8 +343,11 @@ public:
         compressed_blob_.clear();
     }
 
-    void mark_dirty(bool value = true) noexcept { dirty_ = value; }
+    void mark_dirty(bool value = true) noexcept;
     [[nodiscard]] bool dirty() const noexcept { return dirty_; }
+
+    void add_dirty_listener(dirty_listener listener);
+    void clear_dirty_listeners();
 
 private:
     void ensure_capacity();
@@ -371,6 +375,7 @@ private:
     bool compressed_{false};
     byte_vector compressed_blob_{};
     std::mutex compression_mutex_{};
+    std::vector<dirty_listener> dirty_listeners_{};
 };
 
 inline chunk_storage::chunk_storage(chunk_extent extent)
@@ -400,7 +405,8 @@ inline chunk_storage::chunk_storage(chunk_storage&& other) noexcept
     , dirty_{other.dirty_}
     , compression_requested_{other.compression_requested_}
     , compressed_{other.compressed_}
-    , compressed_blob_{std::move(other.compressed_blob_)} {
+    , compressed_blob_{std::move(other.compressed_blob_)}
+    , dirty_listeners_{std::move(other.dirty_listeners_)} {
     other.extent_ = chunk_extent{};
     other.materials_enabled_ = false;
     other.high_precision_lighting_enabled_ = false;
@@ -410,6 +416,7 @@ inline chunk_storage::chunk_storage(chunk_storage&& other) noexcept
     other.dirty_ = false;
     other.compression_requested_ = false;
     other.compressed_ = false;
+    other.dirty_listeners_.clear();
 }
 
 inline chunk_storage& chunk_storage::operator=(chunk_storage&& other) noexcept {
@@ -431,6 +438,7 @@ inline chunk_storage& chunk_storage::operator=(chunk_storage&& other) noexcept {
         compression_requested_ = other.compression_requested_;
         compressed_ = other.compressed_;
         compressed_blob_ = std::move(other.compressed_blob_);
+        dirty_listeners_ = std::move(other.dirty_listeners_);
 
         other.extent_ = chunk_extent{};
         other.materials_enabled_ = false;
@@ -444,8 +452,31 @@ inline chunk_storage& chunk_storage::operator=(chunk_storage&& other) noexcept {
         other.compressed_blob_.clear();
         other.compress_ = {};
         other.decompress_ = {};
+        other.dirty_listeners_.clear();
     }
     return *this;
+}
+
+inline void chunk_storage::mark_dirty(bool value) noexcept {
+    const bool notify = value;
+    if (dirty_ != value) {
+        dirty_ = value;
+    }
+    if (notify && !dirty_listeners_.empty()) {
+        for (auto& listener : dirty_listeners_) {
+            if (listener) {
+                listener();
+            }
+        }
+    }
+}
+
+inline void chunk_storage::add_dirty_listener(dirty_listener listener) {
+    dirty_listeners_.push_back(std::move(listener));
+}
+
+inline void chunk_storage::clear_dirty_listeners() {
+    dirty_listeners_.clear();
 }
 
 inline span3d<voxel_id> chunk_storage::voxels() noexcept {
@@ -711,6 +742,7 @@ public:
     using loader_type = std::function<chunk_storage(const region_key&)>;
     using saver_type = std::function<void(const region_key&, const chunk_storage&)>;
     using task_type = std::function<void(chunk_storage&, const region_key&)>;
+    using dirty_observer = std::function<void(const region_key&)>;
 
     explicit region_manager(chunk_extent chunk_dimensions = cubic_extent(32));
 
@@ -731,6 +763,8 @@ public:
 
     void enqueue_task(const region_key& key, task_type task);
     std::size_t tick(std::size_t budget = std::numeric_limits<std::size_t>::max());
+
+    void add_dirty_observer(dirty_observer observer);
 
     void for_each_loaded(const std::function<void(const region_key&, const chunk_storage&)>& visitor) const;
 
@@ -760,6 +794,7 @@ private:
     loader_type loader_{};
     saver_type saver_{};
     std::deque<std::pair<region_key, task_type>> task_queue_{};
+    std::vector<dirty_observer> dirty_observers_{};
 };
 
 inline region_manager::region_manager(chunk_extent chunk_dimensions)
@@ -814,6 +849,10 @@ inline std::size_t region_manager::tick(std::size_t budget) {
     }
     evict_until_within_limit();
     return processed;
+}
+
+inline void region_manager::add_dirty_observer(dirty_observer observer) {
+    dirty_observers_.push_back(std::move(observer));
 }
 
 inline void region_manager::for_each_loaded(const std::function<void(const region_key&, const chunk_storage&)>& visitor) const {
@@ -878,6 +917,15 @@ inline chunk_storage& region_manager::load_or_create(const region_key& key) {
         chunk = std::make_shared<chunk_storage>(loader_(key));
     } else {
         chunk = std::make_shared<chunk_storage>(chunk_extent_);
+    }
+    if (chunk) {
+        chunk->add_dirty_listener([this, key]() {
+            for (auto& observer : dirty_observers_) {
+                if (observer) {
+                    observer(key);
+                }
+            }
+        });
     }
     auto [it, inserted] = regions_.emplace(key, entry{std::move(chunk), false});
     (void)inserted;
@@ -2557,6 +2605,504 @@ inline double classic_heightfield::sample_height(double world_x, double world_y)
 
 } // namespace almond::voxel::terrain
 // end: almond_voxel/terrain/classic.hpp
+
+// begin: almond_voxel/raytracing/structures.hpp
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <limits>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+namespace almond::voxel::raytracing {
+
+struct voxel_node_bounds {
+    voxel_id min_material{std::numeric_limits<voxel_id>::max()};
+    voxel_id max_material{0};
+    bool occupied{false};
+
+    void include(voxel_id id) {
+        if (id == voxel_id{}) {
+            return;
+        }
+        occupied = true;
+        min_material = std::min(min_material, id);
+        max_material = std::max(max_material, id);
+    }
+};
+
+struct sparse_voxel_octree_node {
+    voxel_node_bounds bounds{};
+    std::array<std::uint32_t, 8> children{};
+    std::uint32_t first_child{std::numeric_limits<std::uint32_t>::max()};
+    std::uint32_t size{0};
+    std::array<std::int32_t, 3> origin{};
+    bool leaf{true};
+};
+
+class sparse_voxel_octree {
+public:
+    struct gpu_node {
+        std::array<float, 3> origin{};
+        float size{0.0f};
+        std::array<std::uint32_t, 8> children{};
+        std::uint32_t leaf{0};
+        std::array<std::uint32_t, 2> material_range{};
+    };
+
+    sparse_voxel_octree() = default;
+
+    void build(const chunk_storage& chunk, std::uint32_t max_depth = 5);
+
+    [[nodiscard]] const sparse_voxel_octree_node& root() const { return nodes_.front(); }
+    [[nodiscard]] const std::vector<sparse_voxel_octree_node>& nodes() const { return nodes_; }
+
+    [[nodiscard]] std::vector<gpu_node> export_gpu_buffer() const;
+
+private:
+    void build_node(std::uint32_t node_index, const chunk_storage& chunk, std::uint32_t depth,
+        std::array<std::uint32_t, 3> size, std::array<std::uint32_t, 3> offset, std::uint32_t max_depth);
+
+    [[nodiscard]] static voxel_node_bounds accumulate_bounds(const chunk_storage& chunk,
+        const std::array<std::uint32_t, 3>& size, const std::array<std::uint32_t, 3>& offset);
+
+    std::vector<sparse_voxel_octree_node> nodes_{};
+};
+
+struct clipmap_level {
+    std::array<std::uint32_t, 3> dimensions{};
+    std::vector<voxel_node_bounds> cells{};
+};
+
+class clipmap_grid {
+public:
+    void build(const chunk_storage& chunk, std::uint32_t levels = 3);
+
+    [[nodiscard]] const std::vector<clipmap_level>& levels() const noexcept { return levels_; }
+
+private:
+    std::vector<clipmap_level> levels_{};
+};
+
+class acceleration_cache {
+public:
+    struct region_entry {
+        sparse_voxel_octree svo{};
+        clipmap_grid clipmap{};
+        bool dirty{true};
+    };
+
+    void update_region(const region_key& key, const chunk_storage& chunk);
+    void invalidate_region(const region_key& key);
+
+    [[nodiscard]] const region_entry* find(const region_key& key) const;
+    [[nodiscard]] region_entry* assure(const region_key& key);
+
+    void rebuild_dirty(const region_manager& manager);
+
+private:
+    std::unordered_map<region_key, region_entry, region_key_hash> regions_{};
+};
+
+inline void sparse_voxel_octree::build(const chunk_storage& chunk, std::uint32_t max_depth) {
+    nodes_.clear();
+    nodes_.push_back({});
+    auto extent = chunk.extent();
+    build_node(0, chunk, 0, {extent.x, extent.y, extent.z}, {0, 0, 0}, max_depth);
+}
+
+inline voxel_node_bounds sparse_voxel_octree::accumulate_bounds(const chunk_storage& chunk,
+    const std::array<std::uint32_t, 3>& size, const std::array<std::uint32_t, 3>& offset) {
+    voxel_node_bounds bounds;
+    const auto voxels = chunk.voxels();
+    for (std::uint32_t z = 0; z < size[2]; ++z) {
+        for (std::uint32_t y = 0; y < size[1]; ++y) {
+            for (std::uint32_t x = 0; x < size[0]; ++x) {
+                const auto px = offset[0] + x;
+                const auto py = offset[1] + y;
+                const auto pz = offset[2] + z;
+                if (!voxels.contains(px, py, pz)) {
+                    continue;
+                }
+                bounds.include(voxels(px, py, pz));
+            }
+        }
+    }
+    if (!bounds.occupied) {
+        bounds.min_material = 0;
+    }
+    return bounds;
+}
+
+inline void sparse_voxel_octree::build_node(std::uint32_t node_index, const chunk_storage& chunk, std::uint32_t depth,
+    std::array<std::uint32_t, 3> size, std::array<std::uint32_t, 3> offset, std::uint32_t max_depth) {
+    auto& node = nodes_[node_index];
+    node.bounds = accumulate_bounds(chunk, size, offset);
+    node.origin = {static_cast<std::int32_t>(offset[0]), static_cast<std::int32_t>(offset[1]),
+        static_cast<std::int32_t>(offset[2])};
+    node.size = size[0];
+    node.leaf = depth >= max_depth || size[0] <= 1 || size[1] <= 1 || size[2] <= 1 || !node.bounds.occupied;
+
+    if (node.leaf) {
+        node.first_child = std::numeric_limits<std::uint32_t>::max();
+        node.children.fill(std::numeric_limits<std::uint32_t>::max());
+        return;
+    }
+
+    node.leaf = false;
+    node.first_child = static_cast<std::uint32_t>(nodes_.size());
+    const std::array<std::uint32_t, 3> child_size{
+        std::max<std::uint32_t>(1, size[0] / 2), std::max<std::uint32_t>(1, size[1] / 2), std::max<std::uint32_t>(1, size[2] / 2)};
+
+    for (std::uint32_t child = 0; child < 8; ++child) {
+        nodes_.push_back({});
+        node.children[child] = node.first_child + child;
+        std::array<std::uint32_t, 3> child_offset = offset;
+        if (child & 1) {
+            child_offset[0] += child_size[0];
+        }
+        if (child & 2) {
+            child_offset[1] += child_size[1];
+        }
+        if (child & 4) {
+            child_offset[2] += child_size[2];
+        }
+        build_node(node.children[child], chunk, depth + 1, child_size, child_offset, max_depth);
+    }
+}
+
+inline std::vector<sparse_voxel_octree::gpu_node> sparse_voxel_octree::export_gpu_buffer() const {
+    std::vector<gpu_node> buffer;
+    buffer.reserve(nodes_.size());
+    for (const auto& node : nodes_) {
+        gpu_node encoded;
+        encoded.origin = {static_cast<float>(node.origin[0]), static_cast<float>(node.origin[1]),
+            static_cast<float>(node.origin[2])};
+        encoded.size = static_cast<float>(node.size);
+        encoded.children = node.children;
+        encoded.leaf = node.leaf ? 1U : 0U;
+        encoded.material_range = {node.bounds.min_material, node.bounds.max_material};
+        buffer.push_back(encoded);
+    }
+    return buffer;
+}
+
+inline void clipmap_grid::build(const chunk_storage& chunk, std::uint32_t levels) {
+    levels_.clear();
+    levels_.reserve(levels);
+    auto extent = chunk.extent();
+    std::array<std::uint32_t, 3> dims{extent.x, extent.y, extent.z};
+
+    for (std::uint32_t level = 0; level < levels; ++level) {
+        clipmap_level entry;
+        entry.dimensions = dims;
+        entry.cells.resize(static_cast<std::size_t>(dims[0]) * dims[1] * dims[2]);
+        const auto voxels = chunk.voxels();
+        for (std::uint32_t z = 0; z < dims[2]; ++z) {
+            for (std::uint32_t y = 0; y < dims[1]; ++y) {
+                for (std::uint32_t x = 0; x < dims[0]; ++x) {
+                    auto& cell = entry.cells[x + dims[0] * (y + dims[1] * z)];
+                    if (voxels.contains(x, y, z)) {
+                        cell.include(voxels(x, y, z));
+                    }
+                }
+            }
+        }
+        levels_.push_back(std::move(entry));
+        dims[0] = std::max(1U, dims[0] / 2);
+        dims[1] = std::max(1U, dims[1] / 2);
+        dims[2] = std::max(1U, dims[2] / 2);
+    }
+}
+
+inline void acceleration_cache::update_region(const region_key& key, const chunk_storage& chunk) {
+    auto& entry = regions_[key];
+    entry.svo.build(chunk);
+    entry.clipmap.build(chunk);
+    entry.dirty = false;
+}
+
+inline void acceleration_cache::invalidate_region(const region_key& key) {
+    if (auto it = regions_.find(key); it != regions_.end()) {
+        it->second.dirty = true;
+    } else {
+        regions_[key].dirty = true;
+    }
+}
+
+inline const acceleration_cache::region_entry* acceleration_cache::find(const region_key& key) const {
+    if (auto it = regions_.find(key); it != regions_.end()) {
+        return &it->second;
+    }
+    return nullptr;
+}
+
+inline acceleration_cache::region_entry* acceleration_cache::assure(const region_key& key) {
+    return &regions_[key];
+}
+
+inline void acceleration_cache::rebuild_dirty(const region_manager& manager) {
+    auto snapshots = manager.snapshot_loaded(true);
+    for (const auto& snapshot : snapshots) {
+        if (!snapshot.chunk) {
+            continue;
+        }
+        auto it = regions_.find(snapshot.key);
+        if (it == regions_.end() || it->second.dirty) {
+            update_region(snapshot.key, *snapshot.chunk);
+        }
+    }
+}
+
+} // namespace almond::voxel::raytracing
+
+// end: almond_voxel/raytracing/structures.hpp
+
+// begin: almond_voxel/raytracing/ray_queries.hpp
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <limits>
+#include <optional>
+
+namespace almond::voxel::raytracing {
+
+struct ray {
+    std::array<float, 3> origin{};
+    std::array<float, 3> direction{};
+};
+
+struct voxel_hit {
+    bool hit{false};
+    std::array<int, 3> position{};
+    float distance{0.0f};
+    voxel_id material{0};
+};
+
+inline std::array<int, 3> floor_to_int(const std::array<float, 3>& value) {
+    return {static_cast<int>(std::floor(value[0])), static_cast<int>(std::floor(value[1])),
+        static_cast<int>(std::floor(value[2]))};
+}
+
+inline voxel_hit trace_voxels(const chunk_storage& chunk, const ray& query, float max_distance) {
+    voxel_hit result;
+    const auto voxels = chunk.voxels();
+    if (voxels.empty()) {
+        return result;
+    }
+
+    std::array<float, 3> inv_dir{};
+    for (int axis = 0; axis < 3; ++axis) {
+        inv_dir[axis] = std::abs(query.direction[axis]) > 1e-6f ? 1.0f / query.direction[axis] : std::numeric_limits<float>::max();
+    }
+
+    std::array<float, 3> pos = query.origin;
+    std::array<int, 3> voxel_pos = floor_to_int(pos);
+
+    std::array<float, 3> t_max{};
+    std::array<float, 3> t_delta{};
+    for (int axis = 0; axis < 3; ++axis) {
+        if (query.direction[axis] > 0.0f) {
+            t_max[axis] = ((static_cast<float>(voxel_pos[axis] + 1) - pos[axis]) * inv_dir[axis]);
+            t_delta[axis] = std::abs(inv_dir[axis]);
+        } else if (query.direction[axis] < 0.0f) {
+            t_max[axis] = ((static_cast<float>(voxel_pos[axis]) - pos[axis]) * inv_dir[axis]);
+            t_delta[axis] = std::abs(inv_dir[axis]);
+        } else {
+            t_max[axis] = std::numeric_limits<float>::infinity();
+            t_delta[axis] = std::numeric_limits<float>::infinity();
+        }
+    }
+
+    std::array<int, 3> step{
+        query.direction[0] > 0.0f ? 1 : (query.direction[0] < 0.0f ? -1 : 0),
+        query.direction[1] > 0.0f ? 1 : (query.direction[1] < 0.0f ? -1 : 0),
+        query.direction[2] > 0.0f ? 1 : (query.direction[2] < 0.0f ? -1 : 0)};
+
+    auto in_bounds = [&](const std::array<int, 3>& coords) {
+        return coords[0] >= 0 && coords[1] >= 0 && coords[2] >= 0 && coords[0] < static_cast<int>(voxels.extent().x)
+            && coords[1] < static_cast<int>(voxels.extent().y) && coords[2] < static_cast<int>(voxels.extent().z);
+    };
+
+    float distance = 0.0f;
+    while (distance <= max_distance) {
+        if (in_bounds(voxel_pos)) {
+            voxel_id id = voxels(static_cast<std::size_t>(voxel_pos[0]), static_cast<std::size_t>(voxel_pos[1]),
+                static_cast<std::size_t>(voxel_pos[2]));
+            if (id != voxel_id{}) {
+                result.hit = true;
+                result.position = voxel_pos;
+                result.distance = distance;
+                result.material = id;
+                return result;
+            }
+        }
+
+        int axis = 0;
+        if (t_max[1] < t_max[axis]) {
+            axis = 1;
+        }
+        if (t_max[2] < t_max[axis]) {
+            axis = 2;
+        }
+
+        distance = t_max[axis];
+        voxel_pos[axis] += step[axis];
+        t_max[axis] += t_delta[axis];
+
+        if (!in_bounds(voxel_pos) && distance > max_distance) {
+            break;
+        }
+    }
+
+    return result;
+}
+
+struct cone_trace_desc {
+    std::array<float, 3> origin{};
+    std::array<float, 3> direction{};
+    float max_distance{16.0f};
+    float aperture{0.5f};
+    std::uint32_t steps{8};
+};
+
+inline float cone_trace_occlusion(const chunk_storage& chunk, const cone_trace_desc& desc) {
+    const auto voxels = chunk.voxels();
+    if (voxels.empty()) {
+        return 0.0f;
+    }
+
+    std::array<float, 3> dir = desc.direction;
+    float length = std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+    if (length <= 1e-6f) {
+        return 0.0f;
+    }
+    dir[0] /= length;
+    dir[1] /= length;
+    dir[2] /= length;
+
+    float occlusion = 0.0f;
+    for (std::uint32_t step = 0; step < desc.steps; ++step) {
+        float t = (static_cast<float>(step) + 0.5f) / static_cast<float>(desc.steps);
+        float radius = desc.aperture * t;
+        float distance = desc.max_distance * t;
+        std::array<float, 3> sample{
+            desc.origin[0] + dir[0] * distance,
+            desc.origin[1] + dir[1] * distance,
+            desc.origin[2] + dir[2] * distance};
+
+        std::array<int, 3> center = floor_to_int(sample);
+        int radius_voxels = static_cast<int>(std::ceil(radius));
+        for (int dz = -radius_voxels; dz <= radius_voxels; ++dz) {
+            for (int dy = -radius_voxels; dy <= radius_voxels; ++dy) {
+                for (int dx = -radius_voxels; dx <= radius_voxels; ++dx) {
+                    std::array<int, 3> probe{center[0] + dx, center[1] + dy, center[2] + dz};
+                    if (probe[0] < 0 || probe[1] < 0 || probe[2] < 0 || probe[0] >= static_cast<int>(voxels.extent().x)
+                        || probe[1] >= static_cast<int>(voxels.extent().y)
+                        || probe[2] >= static_cast<int>(voxels.extent().z)) {
+                        continue;
+                    }
+                    voxel_id id = voxels(static_cast<std::size_t>(probe[0]), static_cast<std::size_t>(probe[1]),
+                        static_cast<std::size_t>(probe[2]));
+                    if (id != voxel_id{}) {
+                        occlusion += 1.0f / static_cast<float>(desc.steps);
+                        dz = radius_voxels + 1;
+                        dy = radius_voxels + 1;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    return std::clamp(occlusion, 0.0f, 1.0f);
+}
+
+inline void export_gpu_nodes(const acceleration_cache& cache, const region_key& key,
+    std::vector<sparse_voxel_octree::gpu_node>& out_buffer) {
+    if (const auto* entry = cache.find(key); entry != nullptr) {
+        auto nodes = entry->svo.export_gpu_buffer();
+        out_buffer.insert(out_buffer.end(), nodes.begin(), nodes.end());
+    }
+}
+
+} // namespace almond::voxel::raytracing
+
+// end: almond_voxel/raytracing/ray_queries.hpp
+
+// begin: almond_voxel/raytracing/lighting.hpp
+
+#include <algorithm>
+#include <memory>
+
+namespace almond::voxel::raytracing {
+
+inline void bake_lighting(chunk_storage& chunk, const sparse_voxel_octree& svo) {
+    (void)svo;
+    auto voxels = chunk.voxels();
+    auto blocklight = chunk.blocklight();
+    auto skylight = chunk.skylight();
+    if (voxels.empty() || blocklight.empty() || skylight.empty()) {
+        return;
+    }
+
+    cone_trace_desc desc{};
+    desc.aperture = 0.75f;
+    desc.steps = 6;
+    desc.max_distance = 12.0f;
+
+    for (std::uint32_t z = 0; z < voxels.extent().z; ++z) {
+        for (std::uint32_t y = 0; y < voxels.extent().y; ++y) {
+            for (std::uint32_t x = 0; x < voxels.extent().x; ++x) {
+                voxel_id id = voxels(x, y, z);
+                if (id == voxel_id{}) {
+                    blocklight(x, y, z) = 0;
+                    skylight(x, y, z) = 15;
+                    continue;
+                }
+
+                desc.origin = {static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f, static_cast<float>(z) + 0.5f};
+                desc.direction = {0.0f, 1.0f, 0.0f};
+                float occlusion = cone_trace_occlusion(chunk, desc);
+                std::uint8_t light_value = static_cast<std::uint8_t>(std::clamp(1.0f - occlusion, 0.0f, 1.0f) * 15.0f);
+                blocklight(x, y, z) = light_value;
+                skylight(x, y, z) = std::max<std::uint8_t>(skylight(x, y, z), light_value);
+            }
+        }
+    }
+}
+
+inline void enqueue_global_illumination(region_manager& manager, const std::shared_ptr<acceleration_cache>& cache) {
+    if (!cache) {
+        return;
+    }
+
+    cache->rebuild_dirty(manager);
+    manager.add_dirty_observer([cache](const region_key& key) {
+        cache->invalidate_region(key);
+    });
+
+    auto snapshots = manager.snapshot_loaded(true);
+    for (const auto& snapshot : snapshots) {
+        if (!snapshot.chunk) {
+            continue;
+        }
+        manager.enqueue_task(snapshot.key, [cache](chunk_storage& chunk, const region_key& key) {
+            cache->update_region(key, chunk);
+            if (auto* entry = cache->find(key); entry != nullptr) {
+                bake_lighting(chunk, entry->svo);
+                chunk.mark_dirty();
+            }
+        });
+    }
+}
+
+} // namespace almond::voxel::raytracing
+
+// end: almond_voxel/raytracing/lighting.hpp
 
 // begin: almond_voxel/version.hpp
 
