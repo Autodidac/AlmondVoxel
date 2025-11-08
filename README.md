@@ -38,6 +38,7 @@ graph LR
         Serializer[serialization/region_io.hpp\nasync IO]
     end
     subgraph Integrations
+        TerrainDemo[examples::terrain_demo\nclip-aware raster]
         ExampleApp[examples::sandbox]
         Tests[tests::voxel_checks]
     end
@@ -45,7 +46,10 @@ graph LR
     VoxelCore --> Chunk --> Region
     Region --> Noise
     Region --> Biomes
-    Chunk --> Mesher --> ExampleApp
+    Chunk --> Mesher --> TerrainDemo
+    Noise --> TerrainDemo
+    Region --> TerrainDemo
+    Mesher --> ExampleApp
     Region --> Serializer --> ExampleApp
     Noise --> Tests
     Mesher --> Tests
@@ -57,11 +61,13 @@ graph TD
         HeaderOnly[[INTERFACE almond_voxel]]
         ExampleSandbox[[example_sandbox]]
         ExampleStreaming[[example_streaming]]
+        TerrainDemo[[terrain_demo\nnear/far clipping]]
         TestSuite[[voxel_tests]]
     end
 
     HeaderOnly --> ExampleSandbox
     HeaderOnly --> ExampleStreaming
+    HeaderOnly --> TerrainDemo
     HeaderOnly --> TestSuite
 
     subgraph Tooling
@@ -74,6 +80,7 @@ graph TD
     Configure --> Build --> TestSuite
     Build --> Install --> ExampleSandbox
     Build --> Run --> ExampleStreaming
+    Run --> TerrainDemo
 ```
 
 ## Key capabilities
