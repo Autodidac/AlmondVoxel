@@ -73,6 +73,7 @@ The `run.sh` helper searches common build folders for the requested binary:
 ./run.sh greedy_mesher_example
 ./run.sh mesh_bench
 ```
+Forward additional demo parameters after `--`, such as `./run.sh terrain_demo -- --mesher=naive` to showcase the naive cubic mesher.
 
 Execute the test suite either through `run.sh` or directly via CTest:
 ```bash
