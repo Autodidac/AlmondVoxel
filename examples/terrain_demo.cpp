@@ -257,7 +257,9 @@ projection_result project_perspective(float3 position, const camera& cam, const 
 
 struct projected_triangle {
     SDL_Vertex vertices[3]{};
-    float depth{};
+    float far_depth{};
+    float near_depth{};
+    float mean_depth{};
 };
 
 struct clip_vertex {
@@ -525,37 +527,54 @@ struct voxel_edit_state {
     return false;
 }
 
+float sample_density_at(double world_x, double world_y, double world_z,
+    const terrain_sampler& sampler, const voxel_edit_state* edits) {
+    if (edits != nullptr) {
+        const std::int64_t block_x = static_cast<std::int64_t>(std::floor(world_x));
+        const std::int64_t block_y = static_cast<std::int64_t>(std::floor(world_y));
+        const std::int64_t block_z = static_cast<std::int64_t>(std::floor(world_z));
+        voxel_coord key{block_x, block_y, block_z};
+        if (auto it = edits->overrides.find(key); it != edits->overrides.end()) {
+            return (it->second != voxel_id{}) ? -0.25f : 0.25f;
+        }
+    }
+
+    const double terrain_height = sampler.height_at(world_x, world_y);
+    return static_cast<float>(world_z - terrain_height);
+}
+
 [[nodiscard]] bool box_intersects_heightfield(const float3& center, const float3& half_extents,
     const terrain_sampler& sampler, const voxel_edit_state* edits) {
     const float min_x = center.x - half_extents.x;
     const float max_x = center.x + half_extents.x;
     const float min_y = center.y - half_extents.y;
     const float max_y = center.y + half_extents.y;
-    const float min_z = center.z - half_extents.z;
-    const float max_z = center.z + half_extents.z;
+    const float bottom = center.z - half_extents.z;
+    const float top = center.z + half_extents.z;
+    const float mid_x = std::lerp(min_x, max_x, 0.5f);
+    const float mid_y = std::lerp(min_y, max_y, 0.5f);
+    const float mid_z = std::lerp(bottom, top, 0.5f);
 
-    const std::int64_t block_min_x = static_cast<std::int64_t>(std::floor(min_x));
-    const std::int64_t block_max_x = static_cast<std::int64_t>(std::floor(max_x));
-    const std::int64_t block_min_y = static_cast<std::int64_t>(std::floor(min_y));
-    const std::int64_t block_max_y = static_cast<std::int64_t>(std::floor(max_y));
-    const std::int64_t block_min_z = static_cast<std::int64_t>(std::floor(min_z));
-    const std::int64_t block_max_z = static_cast<std::int64_t>(std::floor(max_z));
+    const std::array<float, 3> sample_x{min_x, mid_x, max_x};
+    const std::array<float, 3> sample_y{min_y, mid_y, max_y};
+    const std::array<float, 3> sample_z{bottom, mid_z, top};
 
-    for (std::int64_t z = block_min_z; z <= block_max_z; ++z) {
-        for (std::int64_t y = block_min_y; y <= block_max_y; ++y) {
-            for (std::int64_t x = block_min_x; x <= block_max_x; ++x) {
-                if (auto override_id = find_override(edits, x, y, z)) {
-                    if (*override_id != voxel_id{}) {
-                        return true;
-                    }
-                    continue;
-                }
-                if (heightfield_cell_contains_solid(x, y, z, sampler)) {
+    for (float x_value : sample_x) {
+        for (float y_value : sample_y) {
+            for (float z_value : sample_z) {
+                const float density = sample_density_at(
+                    static_cast<double>(x_value),
+                    static_cast<double>(y_value),
+                    static_cast<double>(z_value),
+                    sampler,
+                    edits);
+                if (density <= 0.0f) {
                     return true;
                 }
             }
         }
     }
+
     return false;
 }
 
@@ -727,7 +746,7 @@ struct voxel_raycast_hit {
 }
 
 [[nodiscard]] voxel_raycast_hit raycast_voxels(float3 origin, float3 direction, float max_distance,
-    const terrain_sampler& sampler, const voxel_edit_state* edits) {
+    const terrain_sampler& sampler, const voxel_edit_state* edits, mesher_choice mode) {
     voxel_raycast_hit result{};
     if (length_squared(direction) <= 1e-6f) {
         return result;
@@ -737,6 +756,9 @@ struct voxel_raycast_hit {
     constexpr float step = 0.25f;
     float traveled = 0.0f;
     voxel_coord previous_block{std::numeric_limits<std::int64_t>::min(), 0, 0};
+    voxel_coord last_air_block{};
+    bool has_last_air = false;
+    const bool use_density = (mode == mesher_choice::marching) || (sampler.mode == terrain_mode::classic);
 
     while (traveled <= max_distance) {
         float3 sample = add(origin, scale(direction, traveled));
@@ -752,14 +774,26 @@ struct voxel_raycast_hit {
         }
         previous_block = block;
 
-        if (voxel_is_solid(sampler, edits, block.x, block.y, block.z)) {
+        bool solid = false;
+        if (use_density) {
+            const float density = sample_density_at(sample.x, sample.y, sample.z, sampler, edits);
+            solid = density <= 0.0f;
+        } else {
+            solid = voxel_is_solid(sampler, edits, block.x, block.y, block.z);
+        }
+
+        if (solid) {
             result.valid = true;
             result.hit = block;
+            if (has_last_air) {
+                result.previous = last_air_block;
+                result.has_previous = true;
+            }
             return result;
         }
 
-        result.previous = block;
-        result.has_previous = true;
+        last_air_block = block;
+        has_last_air = true;
         traveled += step;
     }
 
@@ -1294,7 +1328,6 @@ void rebuild_chunks_for_edit(const voxel_coord& block, const chunk_extent& exten
             const std::int64_t ry = region_y + dy;
             region_key region{static_cast<std::int32_t>(rx), static_cast<std::int32_t>(ry), 0};
             const chunk_instance_key key{region, lod.level};
-            cache.erase(key);
             const std::array<std::int64_t, 3> origin{
                 rx * span_x,
                 ry * span_y,
@@ -1466,7 +1499,7 @@ int main(int argc, char** argv) {
                     {
                         std::shared_lock<std::shared_mutex> lock{voxel_edits->mutex};
                         hit = raycast_voxels(cam.position, compute_camera_vectors(cam).forward, 160.0f,
-                            *sampler, voxel_edits.get());
+                            *sampler, voxel_edits.get(), mesher_mode);
                     }
                     if (event.button.button == SDL_BUTTON_LEFT) {
                         if (hit.valid) {
@@ -1660,14 +1693,23 @@ int main(int argc, char** argv) {
                     tri.vertices[0] = make_projected_vertex(v0, cam, output_width, output_height);
                     tri.vertices[1] = make_projected_vertex(v1, cam, output_width, output_height);
                     tri.vertices[2] = make_projected_vertex(v2, cam, output_width, output_height);
-                    tri.depth = std::max({v0.z, v1.z, v2.z});
+                    tri.far_depth = std::max({v0.z, v1.z, v2.z});
+                    tri.near_depth = std::min({v0.z, v1.z, v2.z});
+                    tri.mean_depth = (v0.z + v1.z + v2.z) / 3.0f;
                     triangles.push_back(tri);
                 }
             }
         }
 
-        std::sort(triangles.begin(), triangles.end(), [](const projected_triangle& a, const projected_triangle& b) {
-            return a.depth > b.depth;
+        std::stable_sort(triangles.begin(), triangles.end(), [](const projected_triangle& a, const projected_triangle& b) {
+            constexpr float epsilon = 1e-4f;
+            if (std::abs(a.far_depth - b.far_depth) > epsilon) {
+                return a.far_depth > b.far_depth;
+            }
+            if (std::abs(a.near_depth - b.near_depth) > epsilon) {
+                return a.near_depth > b.near_depth;
+            }
+            return a.mean_depth > b.mean_depth;
         });
 
         for (const auto& tri : triangles) {
