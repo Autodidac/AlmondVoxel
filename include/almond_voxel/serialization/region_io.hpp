@@ -3,6 +3,7 @@
 #include "almond_voxel/chunk.hpp"
 #include "almond_voxel/world.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -17,10 +18,26 @@
 
 namespace almond::voxel::serialization {
 
-struct chunk_header {
-    char magic[4]{'A', 'V', 'C', 'K'};
+constexpr std::uint32_t chunk_version_latest = 2;
+constexpr std::array<char, 4> chunk_magic{'A', 'V', 'C', 'K'};
+
+struct chunk_header_v1 {
+    char magic[4]{chunk_magic[0], chunk_magic[1], chunk_magic[2], chunk_magic[3]};
     std::uint32_t version{1};
     std::uint32_t extent[3]{1, 1, 1};
+};
+
+struct chunk_header_v2 {
+    char magic[4]{chunk_magic[0], chunk_magic[1], chunk_magic[2], chunk_magic[3]};
+    std::uint32_t version{chunk_version_latest};
+    std::uint32_t extent[3]{1, 1, 1};
+    std::uint32_t channel_flags{0};
+};
+
+enum chunk_channel_flags : std::uint32_t {
+    chunk_channel_materials = 1u << 0u,
+    chunk_channel_skylight_cache = 1u << 1u,
+    chunk_channel_blocklight_cache = 1u << 2u
 };
 
 struct region_blob {
@@ -39,15 +56,32 @@ inline std::vector<std::byte> serialize_chunk(const chunk_storage& chunk) {
     const auto sky_data = chunk.skylight();
     const auto block_data = chunk.blocklight();
     const auto meta_data = chunk.metadata();
+    const bool has_materials = chunk.materials_enabled();
+    const bool has_high_precision = chunk.high_precision_lighting_enabled();
 
-    chunk_header header{};
+    chunk_header_v2 header{};
     header.extent[0] = extent.x;
     header.extent[1] = extent.y;
     header.extent[2] = extent.z;
+    if (has_materials) {
+        header.channel_flags |= chunk_channel_materials;
+    }
+    if (has_high_precision) {
+        header.channel_flags |= chunk_channel_skylight_cache | chunk_channel_blocklight_cache;
+    }
+
+    const auto volume = extent.volume();
+    std::size_t payload_bytes = volume * (sizeof(voxel_id) + 3);
+    if (has_materials) {
+        payload_bytes += volume * sizeof(material_index);
+    }
+    if (has_high_precision) {
+        payload_bytes += volume * sizeof(float) * 2;
+    }
 
     std::vector<std::byte> buffer;
-    buffer.reserve(sizeof(chunk_header) + extent.volume() * (sizeof(voxel_id) + 3));
-    append_bytes(buffer, &header, sizeof(chunk_header));
+    buffer.reserve(sizeof(chunk_header_v2) + payload_bytes);
+    append_bytes(buffer, &header, sizeof(header));
 
     const auto copy_span = [&buffer](auto span) {
         using value_type = typename decltype(span)::value_type;
@@ -59,40 +93,143 @@ inline std::vector<std::byte> serialize_chunk(const chunk_storage& chunk) {
     copy_span(block_data.linear());
     copy_span(meta_data.linear());
 
+    if (has_materials) {
+        copy_span(chunk.materials().linear());
+    }
+    if (has_high_precision) {
+        copy_span(chunk.skylight_cache().linear());
+        copy_span(chunk.blocklight_cache().linear());
+    }
+
     return buffer;
 }
 
 inline chunk_storage deserialize_chunk(std::span<const std::byte> bytes) {
-    if (bytes.size() < sizeof(chunk_header)) {
+    if (bytes.size() < sizeof(chunk_header_v1)) {
         throw std::runtime_error("chunk payload too small");
     }
-    const auto* header = reinterpret_cast<const chunk_header*>(bytes.data());
-    if (std::string_view(header->magic, 4) != std::string_view{"AVCK", 4}) {
+
+    chunk_header_v1 header_v1{};
+    std::memcpy(&header_v1, bytes.data(), sizeof(header_v1));
+    if (std::string_view(header_v1.magic, 4) != std::string_view{chunk_magic.data(), chunk_magic.size()}) {
         throw std::runtime_error("invalid chunk magic");
     }
-    chunk_extent extent{header->extent[0], header->extent[1], header->extent[2]};
-    const std::size_t expected = extent.volume();
 
-    const std::size_t payload_size = sizeof(chunk_header) + expected * (sizeof(voxel_id) + 3);
-    if (bytes.size() < payload_size) {
+    if (header_v1.version == 1) {
+        const chunk_extent extent{header_v1.extent[0], header_v1.extent[1], header_v1.extent[2]};
+        const auto count = extent.volume();
+        const std::size_t required = sizeof(chunk_header_v1) + count * (sizeof(voxel_id) + 3);
+        if (bytes.size() < required) {
+            throw std::runtime_error("chunk payload truncated");
+        }
+
+        chunk_storage_config config{};
+        config.extent = extent;
+        chunk_storage chunk{config};
+        const auto* ptr = bytes.data() + sizeof(chunk_header_v1);
+
+        auto copy_into = [&ptr, count](auto view) {
+            using value_type = typename decltype(view)::element_type;
+            std::memcpy(view.linear().data(), ptr, count * sizeof(value_type));
+            ptr += count * sizeof(value_type);
+        };
+
+        copy_into(chunk.voxels());
+        copy_into(chunk.skylight());
+        copy_into(chunk.blocklight());
+        copy_into(chunk.metadata());
+        chunk.mark_dirty(false);
+        return chunk;
+    }
+
+    if (bytes.size() < sizeof(chunk_header_v2)) {
+        throw std::runtime_error("chunk payload too small for extended header");
+    }
+
+    chunk_header_v2 header_v2{};
+    std::memcpy(&header_v2, bytes.data(), sizeof(header_v2));
+    if (header_v2.version < 2) {
+        throw std::runtime_error("unsupported chunk version");
+    }
+
+    const chunk_extent extent{header_v2.extent[0], header_v2.extent[1], header_v2.extent[2]};
+    const auto count = extent.volume();
+    const bool has_materials = (header_v2.channel_flags & chunk_channel_materials) != 0;
+    const bool has_sky_cache = (header_v2.channel_flags & chunk_channel_skylight_cache) != 0;
+    const bool has_block_cache = (header_v2.channel_flags & chunk_channel_blocklight_cache) != 0;
+
+    std::size_t required = sizeof(chunk_header_v2) + count * (sizeof(voxel_id) + 3);
+    if (has_materials) {
+        required += count * sizeof(material_index);
+    }
+    if (has_sky_cache) {
+        required += count * sizeof(float);
+    }
+    if (has_block_cache) {
+        required += count * sizeof(float);
+    }
+    if (bytes.size() < required) {
         throw std::runtime_error("chunk payload truncated");
     }
 
-    chunk_storage chunk{extent};
-    auto* ptr = bytes.data() + sizeof(chunk_header);
+    chunk_storage_config config{};
+    config.extent = extent;
+    config.enable_materials = has_materials;
+    config.enable_high_precision_lighting = has_sky_cache || has_block_cache;
 
-    auto copy_into = [&ptr, expected](auto view) {
+    chunk_storage chunk{config};
+    const auto* ptr = bytes.data() + sizeof(chunk_header_v2);
+
+    auto copy_into = [&ptr, count](auto view) {
         using value_type = typename decltype(view)::element_type;
-        std::memcpy(view.linear().data(), ptr, expected * sizeof(value_type));
-        ptr += expected * sizeof(value_type);
+        std::memcpy(view.linear().data(), ptr, count * sizeof(value_type));
+        ptr += count * sizeof(value_type);
     };
 
     copy_into(chunk.voxels());
     copy_into(chunk.skylight());
     copy_into(chunk.blocklight());
     copy_into(chunk.metadata());
+
+    if (has_materials) {
+        auto materials = chunk.materials();
+        std::memcpy(materials.linear().data(), ptr, count * sizeof(material_index));
+        ptr += count * sizeof(material_index);
+    }
+
+    if (config.enable_high_precision_lighting) {
+        if (has_sky_cache) {
+            auto sky_cache = chunk.skylight_cache();
+            std::memcpy(sky_cache.linear().data(), ptr, count * sizeof(float));
+            ptr += count * sizeof(float);
+        }
+        if (has_block_cache) {
+            auto block_cache = chunk.blocklight_cache();
+            std::memcpy(block_cache.linear().data(), ptr, count * sizeof(float));
+            ptr += count * sizeof(float);
+        }
+    }
+
     chunk.mark_dirty(false);
     return chunk;
+}
+
+inline bool is_legacy_chunk_payload(std::span<const std::byte> bytes) {
+    if (bytes.size() < sizeof(chunk_header_v1)) {
+        return false;
+    }
+    chunk_header_v1 header{};
+    std::memcpy(&header, bytes.data(), sizeof(header));
+    return std::string_view(header.magic, 4) == std::string_view{chunk_magic.data(), chunk_magic.size()}
+        && header.version == 1;
+}
+
+inline std::vector<std::byte> migrate_legacy_chunk_payload(std::span<const std::byte> bytes) {
+    if (!is_legacy_chunk_payload(bytes)) {
+        throw std::runtime_error("chunk payload is not a legacy format");
+    }
+    chunk_storage chunk = deserialize_chunk(bytes);
+    return serialize_chunk(chunk);
 }
 
 inline void serialize_chunk_to_stream(const chunk_storage& chunk, std::ostream& out) {
@@ -101,27 +238,59 @@ inline void serialize_chunk_to_stream(const chunk_storage& chunk, std::ostream& 
 }
 
 inline chunk_storage deserialize_chunk_from_stream(std::istream& in) {
-    chunk_header header{};
-    in.read(reinterpret_cast<char*>(&header), sizeof(header));
+    chunk_header_v1 header_v1{};
+    in.read(reinterpret_cast<char*>(&header_v1), sizeof(header_v1));
     if (!in) {
         throw std::runtime_error("unable to read chunk header");
     }
-    if (std::string_view(header.magic, 4) != std::string_view{"AVCK", 4}) {
+    if (std::string_view(header_v1.magic, 4) != std::string_view{chunk_magic.data(), chunk_magic.size()}) {
         throw std::runtime_error("invalid chunk magic");
     }
-    chunk_extent extent{header.extent[0], header.extent[1], header.extent[2]};
-    const std::size_t expected = extent.volume();
-    std::vector<std::byte> payload;
-    payload.resize(expected * (sizeof(voxel_id) + 3));
-    in.read(reinterpret_cast<char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+
+    if (header_v1.version == 1) {
+        const chunk_extent extent{header_v1.extent[0], header_v1.extent[1], header_v1.extent[2]};
+        const auto count = extent.volume();
+        std::vector<std::byte> payload(sizeof(chunk_header_v1) + count * (sizeof(voxel_id) + 3));
+        std::memcpy(payload.data(), &header_v1, sizeof(header_v1));
+        in.read(reinterpret_cast<char*>(payload.data() + sizeof(header_v1)),
+            static_cast<std::streamsize>(payload.size() - sizeof(header_v1)));
+        if (!in) {
+            throw std::runtime_error("unable to read chunk payload");
+        }
+        return deserialize_chunk(payload);
+    }
+
+    std::uint32_t flags = 0;
+    in.read(reinterpret_cast<char*>(&flags), sizeof(flags));
+    if (!in) {
+        throw std::runtime_error("unable to read chunk channel flags");
+    }
+
+    chunk_header_v2 header_v2{};
+    std::memcpy(&header_v2, &header_v1, sizeof(header_v1));
+    header_v2.version = header_v1.version;
+    header_v2.channel_flags = flags;
+
+    const chunk_extent extent{header_v2.extent[0], header_v2.extent[1], header_v2.extent[2]};
+    const auto count = extent.volume();
+    std::size_t payload_bytes = count * (sizeof(voxel_id) + 3);
+    if (flags & chunk_channel_materials) {
+        payload_bytes += count * sizeof(material_index);
+    }
+    if (flags & chunk_channel_skylight_cache) {
+        payload_bytes += count * sizeof(float);
+    }
+    if (flags & chunk_channel_blocklight_cache) {
+        payload_bytes += count * sizeof(float);
+    }
+
+    std::vector<std::byte> payload(sizeof(chunk_header_v2) + payload_bytes);
+    std::memcpy(payload.data(), &header_v2, sizeof(header_v2));
+    in.read(reinterpret_cast<char*>(payload.data() + sizeof(header_v2)), static_cast<std::streamsize>(payload_bytes));
     if (!in) {
         throw std::runtime_error("unable to read chunk payload");
     }
-    std::vector<std::byte> full;
-    full.reserve(sizeof(chunk_header) + payload.size());
-    append_bytes(full, &header, sizeof(header));
-    full.insert(full.end(), payload.begin(), payload.end());
-    return deserialize_chunk(full);
+    return deserialize_chunk(payload);
 }
 
 inline region_blob serialize_snapshot(const region_manager::region_snapshot& snapshot) {
@@ -184,13 +353,7 @@ inline std::optional<region_blob> read_region_blob(std::istream& in) {
 inline void ingest_blob(region_manager& manager, const region_blob& blob) {
     chunk_storage chunk = deserialize_chunk(blob.payload);
     auto& target = manager.assure(blob.key);
-    target.assign_voxels(chunk.voxels().linear());
-    auto sky = target.skylight();
-    auto block = target.blocklight();
-    auto meta = target.metadata();
-    std::memcpy(sky.linear().data(), chunk.skylight().linear().data(), sky.linear().size_bytes());
-    std::memcpy(block.linear().data(), chunk.blocklight().linear().data(), block.linear().size_bytes());
-    std::memcpy(meta.linear().data(), chunk.metadata().linear().data(), meta.linear().size_bytes());
+    target = std::move(chunk);
     target.mark_dirty(false);
 }
 
