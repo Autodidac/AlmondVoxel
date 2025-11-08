@@ -35,3 +35,10 @@ target_compile_options(marching_cubes_example PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
 )
+
+add_executable(navigation_example navigation_example.cpp)
+target_link_libraries(navigation_example PRIVATE almond_voxel)
+target_compile_options(navigation_example PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
+    $<$<CXX_COMPILER_ID:MSVC>:/W4>
+)

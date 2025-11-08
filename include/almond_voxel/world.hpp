@@ -1,6 +1,8 @@
 #pragma once
 
 #include "almond_voxel/chunk.hpp"
+#include "almond_voxel/navigation/voxel_nav.hpp"
+#include "almond_voxel/world_fwd.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -8,35 +10,17 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <span>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace almond::voxel {
 
-struct region_key {
-    std::int32_t x{0};
-    std::int32_t y{0};
-    std::int32_t z{0};
-
-    [[nodiscard]] friend constexpr bool operator==(const region_key& lhs, const region_key& rhs) noexcept = default;
-};
-
-struct region_key_hash {
-    [[nodiscard]] std::size_t operator()(const region_key& key) const noexcept {
-        std::uint64_t hx = static_cast<std::uint64_t>(key.x);
-        std::uint64_t hy = static_cast<std::uint64_t>(key.y);
-        std::uint64_t hz = static_cast<std::uint64_t>(key.z);
-        std::uint64_t hash = hx * 0x9E3779B185EBCA87ull;
-        hash ^= hy + 0x9E3779B97F4A7C15ull + (hash << 6) + (hash >> 2);
-        hash ^= hz + 0xC2B2AE3D27D4EB4Full + (hash << 6) + (hash >> 2);
-        return static_cast<std::size_t>(hash);
-    }
-};
-
 class region_manager {
 public:
     using chunk_ptr = std::shared_ptr<chunk_storage>;
+    using nav_grid_ptr = std::shared_ptr<navigation::nav_grid>;
     using loader_type = std::function<chunk_storage(const region_key&)>;
     using saver_type = std::function<void(const region_key&, const chunk_storage&)>;
     using task_type = std::function<void(chunk_storage&, const region_key&)>;
@@ -64,6 +48,13 @@ public:
 
     void add_dirty_observer(dirty_observer observer);
 
+    void enable_navigation(bool enable = true);
+    void set_navigation_build_config(navigation::nav_build_config config);
+    [[nodiscard]] std::shared_ptr<const navigation::nav_grid> navigation_grid(const region_key& key) const;
+    void request_navigation_rebuild(const region_key& key);
+    [[nodiscard]] navigation::stitched_nav_graph stitch_navigation(const region_key& origin,
+        std::span<const region_key> neighbors) const;
+
     void for_each_loaded(const std::function<void(const region_key&, const chunk_storage&)>& visitor) const;
 
     struct region_snapshot {
@@ -82,8 +73,18 @@ private:
         bool pinned{false};
     };
 
+    struct nav_cache_entry {
+        nav_grid_ptr grid;
+        bool dirty{true};
+        bool rebuild_pending{false};
+        std::size_t revision{0};
+    };
+
     chunk_storage& load_or_create(const region_key& key);
     void touch(const region_key& key);
+    void mark_nav_dirty(const region_key& key);
+    void schedule_nav_rebuild(const region_key& key);
+    void clear_nav_cache(const region_key& key);
 
     chunk_extent chunk_extent_{};
     std::unordered_map<region_key, entry, region_key_hash> regions_{};
@@ -93,6 +94,9 @@ private:
     saver_type saver_{};
     std::deque<std::pair<region_key, task_type>> task_queue_{};
     std::vector<dirty_observer> dirty_observers_{};
+    navigation::nav_build_config nav_config_{};
+    bool navigation_enabled_{false};
+    std::unordered_map<region_key, nav_cache_entry, region_key_hash> nav_cache_{};
 };
 
 inline region_manager::region_manager(chunk_extent chunk_dimensions)
@@ -153,6 +157,76 @@ inline void region_manager::add_dirty_observer(dirty_observer observer) {
     dirty_observers_.push_back(std::move(observer));
 }
 
+inline void region_manager::enable_navigation(bool enable) {
+    if (navigation_enabled_ == enable) {
+        return;
+    }
+    navigation_enabled_ = enable;
+    if (!navigation_enabled_) {
+        nav_cache_.clear();
+        return;
+    }
+    nav_cache_.clear();
+    for (const auto& [key, entry] : regions_) {
+        if (entry.chunk) {
+            mark_nav_dirty(key);
+        }
+    }
+}
+
+inline void region_manager::set_navigation_build_config(navigation::nav_build_config config) {
+    nav_config_ = std::move(config);
+    if (!navigation_enabled_) {
+        return;
+    }
+    for (const auto& [key, entry] : regions_) {
+        if (entry.chunk) {
+            mark_nav_dirty(key);
+        }
+    }
+}
+
+inline std::shared_ptr<const navigation::nav_grid> region_manager::navigation_grid(const region_key& key) const {
+    if (!navigation_enabled_) {
+        return {};
+    }
+    if (auto it = nav_cache_.find(key); it != nav_cache_.end()) {
+        return it->second.grid;
+    }
+    return {};
+}
+
+inline void region_manager::request_navigation_rebuild(const region_key& key) {
+    if (!navigation_enabled_) {
+        return;
+    }
+    mark_nav_dirty(key);
+}
+
+inline navigation::stitched_nav_graph region_manager::stitch_navigation(const region_key& origin,
+    std::span<const region_key> neighbors) const {
+    navigation::stitched_nav_graph stitched;
+    if (!navigation_enabled_) {
+        return stitched;
+    }
+
+    const auto add_region = [&](const region_key& key) {
+        if (auto it = nav_cache_.find(key); it != nav_cache_.end()) {
+            if (it->second.grid) {
+                stitched.regions.push_back(navigation::nav_region_view{key, it->second.grid});
+            }
+        }
+    };
+
+    add_region(origin);
+    for (const auto& neighbor : neighbors) {
+        add_region(neighbor);
+    }
+
+    navigation::stitch_neighbor_regions(nav_config_.neighbor, chunk_extent_, stitched);
+    return stitched;
+}
+
 inline void region_manager::for_each_loaded(const std::function<void(const region_key&, const chunk_storage&)>& visitor) const {
     for (const auto& [key, entry] : regions_) {
         if (entry.chunk) {
@@ -187,6 +261,7 @@ inline bool region_manager::unload(const region_key& key) {
     if (it->second.chunk && saver_ && it->second.chunk->dirty()) {
         saver_(key, *it->second.chunk);
     }
+    clear_nav_cache(key);
     regions_.erase(it);
     return true;
 }
@@ -202,6 +277,7 @@ inline void region_manager::evict_until_within_limit() {
         if (it->second.chunk && saver_ && it->second.chunk->dirty()) {
             saver_(key, *it->second.chunk);
         }
+        clear_nav_cache(key);
         regions_.erase(it);
     }
 }
@@ -218,6 +294,7 @@ inline chunk_storage& region_manager::load_or_create(const region_key& key) {
     }
     if (chunk) {
         chunk->add_dirty_listener([this, key]() {
+            mark_nav_dirty(key);
             for (auto& observer : dirty_observers_) {
                 if (observer) {
                     observer(key);
@@ -227,12 +304,49 @@ inline chunk_storage& region_manager::load_or_create(const region_key& key) {
     }
     auto [it, inserted] = regions_.emplace(key, entry{std::move(chunk), false});
     (void)inserted;
+    if (navigation_enabled_) {
+        mark_nav_dirty(key);
+    }
     return *it->second.chunk;
 }
 
 inline void region_manager::touch(const region_key& key) {
     std::erase(lru_, key);
     lru_.push_back(key);
+}
+
+inline void region_manager::mark_nav_dirty(const region_key& key) {
+    if (!navigation_enabled_) {
+        return;
+    }
+    auto& entry = nav_cache_[key];
+    entry.dirty = true;
+    schedule_nav_rebuild(key);
+}
+
+inline void region_manager::schedule_nav_rebuild(const region_key& key) {
+    if (!navigation_enabled_) {
+        return;
+    }
+    auto& entry = nav_cache_[key];
+    if (entry.rebuild_pending) {
+        return;
+    }
+    entry.rebuild_pending = true;
+    task_queue_.emplace_back(key, [this, key](chunk_storage& chunk, const region_key&) {
+        auto grid = std::make_shared<navigation::nav_grid>(
+            navigation::build_nav_grid(static_cast<const chunk_storage&>(chunk), nav_config_));
+        if (auto it = nav_cache_.find(key); it != nav_cache_.end()) {
+            it->second.grid = std::move(grid);
+            it->second.dirty = false;
+            it->second.rebuild_pending = false;
+            ++it->second.revision;
+        }
+    });
+}
+
+inline void region_manager::clear_nav_cache(const region_key& key) {
+    nav_cache_.erase(key);
 }
 
 } // namespace almond::voxel
