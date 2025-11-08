@@ -1811,7 +1811,7 @@ int main(int argc, char** argv) {
                     std::array<std::int32_t, 2> a{};
                     std::array<std::int32_t, 2> b{};
 
-                    [[nodiscard]] friend bool operator==(const wire_edge_key&, const wire_edge_key&) noexcept = default;
+                    [[nodiscard]] bool operator==(const wire_edge_key&) const noexcept = default;
                 };
 
                 struct wire_edge_hash {
