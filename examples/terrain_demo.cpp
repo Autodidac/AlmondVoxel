@@ -67,12 +67,12 @@ constexpr std::string_view debug_mode_name(debug_display_mode mode) {
 
 constexpr debug_display_mode cycle_debug_mode(debug_display_mode mode,
     mesher_choice mesher, terrain_mode terrain) {
-    const bool supports_wireframe = mesher == mesher_choice::marching
-        || terrain == terrain_mode::classic;
+    (void)mesher;
+    (void)terrain;
 
     switch (mode) {
     case debug_display_mode::off:
-        return supports_wireframe ? debug_display_mode::wireframe : debug_display_mode::solid_chunks;
+        return debug_display_mode::wireframe;
     case debug_display_mode::wireframe:
         return debug_display_mode::solid_chunks;
     case debug_display_mode::solid_chunks:
@@ -1381,12 +1381,8 @@ int main(int argc, char** argv) {
     bool running = true;
     debug_display_mode debug_mode = debug_display_mode::off;
     auto enforce_debug_mode_support = [&]() {
-        const bool supports_wireframe = mesher_mode == mesher_choice::marching
-            || terrain_setting == terrain_mode::classic;
-        if (!supports_wireframe && debug_mode == debug_display_mode::wireframe) {
-            debug_mode = debug_display_mode::solid_chunks;
-            std::cout << "Debug overlay: " << debug_mode_name(debug_mode) << "\n";
-        }
+        (void)mesher_mode;
+        (void)terrain_setting;
     };
     bool mouse_captured = true;
     std::uint64_t previous_ticks = SDL_GetTicks();
