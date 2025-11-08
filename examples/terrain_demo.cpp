@@ -220,6 +220,91 @@ struct projected_triangle {
     float depth{};
 };
 
+struct clip_vertex {
+    float x{};
+    float y{};
+    float z{};
+    SDL_FColor color{};
+};
+
+clip_vertex make_clip_vertex(const float3& position, const SDL_FColor& color,
+    const camera& cam, const camera_vectors& vectors)
+{
+    const float3 relative = subtract(position, cam.position);
+    clip_vertex vertex{};
+    vertex.x = dot(relative, vectors.right);
+    vertex.y = dot(relative, vectors.up);
+    vertex.z = dot(relative, vectors.forward);
+    vertex.color = color;
+    return vertex;
+}
+
+clip_vertex interpolate_vertex(const clip_vertex& a, const clip_vertex& b, float plane_z)
+{
+    const float delta_z = b.z - a.z;
+    if (std::abs(delta_z) <= 1e-6f) {
+        return a;
+    }
+
+    const float t = std::clamp((plane_z - a.z) / delta_z, 0.0f, 1.0f);
+    clip_vertex result{};
+    result.x = a.x + (b.x - a.x) * t;
+    result.y = a.y + (b.y - a.y) * t;
+    result.z = a.z + (b.z - a.z) * t;
+    result.color.r = a.color.r + (b.color.r - a.color.r) * t;
+    result.color.g = a.color.g + (b.color.g - a.color.g) * t;
+    result.color.b = a.color.b + (b.color.b - a.color.b) * t;
+    result.color.a = a.color.a + (b.color.a - a.color.a) * t;
+    return result;
+}
+
+void clip_against_plane(const std::vector<clip_vertex>& input, std::vector<clip_vertex>& output,
+    float plane_z, bool keep_greater)
+{
+    output.clear();
+    if (input.empty()) {
+        return;
+    }
+
+    const std::size_t count = input.size();
+    for (std::size_t i = 0; i < count; ++i) {
+        const clip_vertex& current = input[i];
+        const clip_vertex& next = input[(i + 1) % count];
+        const bool current_inside = keep_greater ? current.z >= plane_z : current.z <= plane_z;
+        const bool next_inside = keep_greater ? next.z >= plane_z : next.z <= plane_z;
+
+        if (current_inside && next_inside) {
+            output.push_back(next);
+        } else if (current_inside && !next_inside) {
+            output.push_back(interpolate_vertex(current, next, plane_z));
+        } else if (!current_inside && next_inside) {
+            output.push_back(interpolate_vertex(current, next, plane_z));
+            output.push_back(next);
+        }
+    }
+}
+
+SDL_Vertex make_projected_vertex(const clip_vertex& vertex, const camera& cam, int width, int height)
+{
+    SDL_Vertex result{};
+
+    const float safe_width = static_cast<float>(std::max(width, 1));
+    const float safe_height = static_cast<float>(std::max(height, 1));
+    const float aspect = safe_width / safe_height;
+    const float f = 1.0f / std::tan(cam.fov * 0.5f);
+
+    const float ndc_x = (vertex.x * f / aspect) / vertex.z;
+    const float ndc_y = (vertex.y * f) / vertex.z;
+
+    result.position = SDL_FPoint{
+        (ndc_x * 0.5f + 0.5f) * safe_width,
+        (0.5f - ndc_y * 0.5f) * safe_height
+    };
+    result.color = vertex.color;
+    result.tex_coord = SDL_FPoint{0.0f, 0.0f};
+    return result;
+}
+
 struct chunk_instance_key {
     region_key region{};
     int lod{0};
@@ -1285,6 +1370,8 @@ int main(int argc, char** argv) {
 
     std::vector<projected_triangle> triangles;
     std::vector<SDL_Vertex> draw_vertices;
+    std::vector<clip_vertex> clip_work;
+    std::vector<clip_vertex> clip_temp;
 
     SDL_SetWindowRelativeMouseMode(window, true);
 
@@ -1464,9 +1551,11 @@ int main(int argc, char** argv) {
         }
 
         triangles.clear();
-        triangles.reserve(total_triangles);
+        triangles.reserve(total_triangles * 2);
         draw_vertices.clear();
-        draw_vertices.reserve(total_triangles * 3);
+        draw_vertices.reserve(total_triangles * 6);
+        clip_work.clear();
+        clip_temp.clear();
 
         const auto world_position = [](const chunk_mesh_entry& chunk, const meshing::vertex& vertex) {
             return float3{
@@ -1496,35 +1585,43 @@ int main(int argc, char** argv) {
                     }
                 }
 
-                projected_triangle tri{};
-                bool visible = true;
-                float depth_sum = 0.0f;
+                clip_work.clear();
+                clip_work.reserve(6);
+                clip_temp.clear();
+                clip_temp.reserve(6);
+
                 const std::array<std::uint32_t, 3> indices{i0, i1, i2};
                 const std::array<float3, 3> positions{p0, p1, p2};
 
                 for (std::size_t corner = 0; corner < indices.size(); ++corner) {
                     const std::uint32_t idx = indices[corner];
-                    const float3& position = positions[corner];
-                    const projection_result projected = project_perspective(position, cam, vectors, output_width, output_height);
-                    if (!projected.visible) {
-                        visible = false;
-                        break;
-                    }
-
-                    SDL_Vertex v{};
-                    v.position = projected.point;
-                    v.color = shade_color(mesh.vertices[idx].id, mesh.vertices[idx].normal, chunk.mode, chunk.terrain);
-                    v.tex_coord = SDL_FPoint{0.0f, 0.0f};
-                    tri.vertices[corner] = v;
-                    depth_sum += projected.depth;
+                    const SDL_FColor color = shade_color(
+                        mesh.vertices[idx].id, mesh.vertices[idx].normal, chunk.mode, chunk.terrain);
+                    clip_work.push_back(make_clip_vertex(positions[corner], color, cam, vectors));
                 }
 
-                if (!visible) {
+                clip_against_plane(clip_work, clip_temp, cam.near_plane, true);
+                if (clip_temp.empty()) {
                     continue;
                 }
 
-                tri.depth = depth_sum / 3.0f;
-                triangles.push_back(tri);
+                clip_against_plane(clip_temp, clip_work, cam.far_plane, false);
+                if (clip_work.size() < 3) {
+                    continue;
+                }
+
+                for (std::size_t corner = 1; corner + 1 < clip_work.size(); ++corner) {
+                    projected_triangle tri{};
+                    const clip_vertex& v0 = clip_work[0];
+                    const clip_vertex& v1 = clip_work[corner];
+                    const clip_vertex& v2 = clip_work[corner + 1];
+
+                    tri.vertices[0] = make_projected_vertex(v0, cam, output_width, output_height);
+                    tri.vertices[1] = make_projected_vertex(v1, cam, output_width, output_height);
+                    tri.vertices[2] = make_projected_vertex(v2, cam, output_width, output_height);
+                    tri.depth = (v0.z + v1.z + v2.z) / 3.0f;
+                    triangles.push_back(tri);
+                }
             }
         }
 
