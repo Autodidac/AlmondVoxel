@@ -1805,6 +1805,12 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
 
     const double clamped_scale = std::clamp(static_cast<double>(render_distance_scale), 0.0, 10.0);
 
+    struct chunk_candidate {
+        region_key region{};
+        std::array<std::int64_t, 3> origin{};
+        double distance{};
+    };
+
     for (const auto& lod : lods) {
         const double chunk_size = static_cast<double>(extent.x) * static_cast<double>(lod.cell_size);
         if (chunk_size <= 0.0) {
@@ -1833,6 +1839,10 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
         const int base_y = static_cast<int>(std::floor(static_cast<double>(cam.position.y) / chunk_size));
         const int radius = static_cast<int>(std::ceil(scaled_max_distance / chunk_size)) + 1;
 
+        const int diameter = radius * 2 + 1;
+        std::vector<chunk_candidate> chunk_candidates;
+        chunk_candidates.reserve(static_cast<std::size_t>(diameter) * static_cast<std::size_t>(diameter));
+
         for (int dy = -radius; dy <= radius; ++dy) {
             for (int dx = -radius; dx <= radius; ++dx) {
                 region_key region{base_x + dx, base_y + dy, 0};
@@ -1852,26 +1862,52 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
                     continue;
                 }
 
-                const chunk_instance_key key{region, lod.level};
-                if (needed.insert(key).second) {
-                    required_origins[key] = origin;
-                    required_cell_sizes[key] = lod.cell_size;
-                }
+                chunk_candidates.push_back(chunk_candidate{region, origin, distance});
+            }
+        }
 
-                auto it = cache.find(key);
-                if (it == cache.end()) {
-                    if (enqueued_this_frame >= build_budget || builder.is_pending(key)) {
-                        continue;
-                    }
-                    builder.enqueue(key, extent, origin, lod.cell_size, mode, sampler, edits);
-                    ++enqueued_this_frame;
-                } else if (it->second.mode != mode || it->second.terrain != terrain_setting) {
-                    if (builder.is_pending(key) || enqueued_this_frame >= build_budget) {
-                        continue;
-                    }
-                    builder.enqueue(key, extent, origin, lod.cell_size, mode, sampler, edits);
-                    ++enqueued_this_frame;
+        std::sort(chunk_candidates.begin(), chunk_candidates.end(), [](const chunk_candidate& lhs, const chunk_candidate& rhs) {
+            if (lhs.distance < rhs.distance) {
+                return true;
+            }
+            if (rhs.distance < lhs.distance) {
+                return false;
+            }
+            if (lhs.region.y < rhs.region.y) {
+                return true;
+            }
+            if (rhs.region.y < lhs.region.y) {
+                return false;
+            }
+            if (lhs.region.x < rhs.region.x) {
+                return true;
+            }
+            if (rhs.region.x < lhs.region.x) {
+                return false;
+            }
+            return lhs.region.z < rhs.region.z;
+        });
+
+        for (const auto& candidate : chunk_candidates) {
+            const chunk_instance_key key{candidate.region, lod.level};
+            if (needed.insert(key).second) {
+                required_origins[key] = candidate.origin;
+                required_cell_sizes[key] = lod.cell_size;
+            }
+
+            auto it = cache.find(key);
+            if (it == cache.end()) {
+                if (enqueued_this_frame >= build_budget || builder.is_pending(key)) {
+                    continue;
                 }
+                builder.enqueue(key, extent, candidate.origin, lod.cell_size, mode, sampler, edits);
+                ++enqueued_this_frame;
+            } else if (it->second.mode != mode || it->second.terrain != terrain_setting) {
+                if (builder.is_pending(key) || enqueued_this_frame >= build_budget) {
+                    continue;
+                }
+                builder.enqueue(key, extent, candidate.origin, lod.cell_size, mode, sampler, edits);
+                ++enqueued_this_frame;
             }
         }
     }
