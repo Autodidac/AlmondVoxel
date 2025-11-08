@@ -196,22 +196,22 @@ projection_result project_perspective(float3 position, const camera& cam, const 
     const float y = dot(relative, vectors.up);
     const float z = dot(relative, vectors.forward);
 
-    if (z <= cam.near_plane || z >= cam.far_plane) {
-        result.visible = false;
-        return result;
-    }
+    const float near_epsilon = cam.near_plane + 1e-3f;
+    const float far_epsilon = cam.far_plane - 1e-3f;
+    const bool depth_visible = (z > cam.near_plane) && (z < cam.far_plane);
+    const float clamped_z = std::clamp(z, near_epsilon, far_epsilon);
 
     const float safe_width = static_cast<float>(std::max(width, 1));
     const float safe_height = static_cast<float>(std::max(height, 1));
     const float aspect = safe_width / safe_height;
     const float f = 1.0f / std::tan(cam.fov * 0.5f);
 
-    const float ndc_x = (x * f / aspect) / z;
-    const float ndc_y = (y * f) / z;
+    const float ndc_x = (x * f / aspect) / clamped_z;
+    const float ndc_y = (y * f) / clamped_z;
 
     result.point = SDL_FPoint{(ndc_x * 0.5f + 0.5f) * safe_width, (0.5f - ndc_y * 0.5f) * safe_height};
-    result.depth = z;
-    result.visible = true;
+    result.depth = clamped_z;
+    result.visible = depth_visible;
     return result;
 }
 
@@ -494,6 +494,30 @@ void move_player_axis(float3& position, float& velocity_component, float delta, 
 
     const bool use_heightfield = (mode == mesher_choice::marching) || (sampler.mode == terrain_mode::classic);
     if (use_heightfield) {
+        if (axis != 2) {
+            const float max_step_height = 0.75f;
+            const float settle_increment = 0.05f;
+            float3 stepped = position;
+            stepped.z += max_step_height;
+            if (!intersects(stepped)) {
+                float3 settled = stepped;
+                for (int i = 0; i < 32; ++i) {
+                    float3 candidate = settled;
+                    candidate.z -= settle_increment;
+                    if (candidate.z < start.z - max_step_height) {
+                        break;
+                    }
+                    if (intersects(candidate)) {
+                        break;
+                    }
+                    settled = candidate;
+                }
+                position = settled;
+                on_ground = true;
+                return;
+            }
+        }
+
         float3 last_safe = start;
         float t_low = 0.0f;
         float t_high = 1.0f;
@@ -1497,7 +1521,7 @@ int main(int argc, char** argv) {
                 }
 
                 projected_triangle tri{};
-                bool visible = true;
+                std::size_t visible_vertices = 0;
                 float depth_sum = 0.0f;
                 const std::array<std::uint32_t, 3> indices{i0, i1, i2};
                 const std::array<float3, 3> positions{p0, p1, p2};
@@ -1506,9 +1530,8 @@ int main(int argc, char** argv) {
                     const std::uint32_t idx = indices[corner];
                     const float3& position = positions[corner];
                     const projection_result projected = project_perspective(position, cam, vectors, output_width, output_height);
-                    if (!projected.visible) {
-                        visible = false;
-                        break;
+                    if (projected.visible) {
+                        ++visible_vertices;
                     }
 
                     SDL_Vertex v{};
@@ -1519,7 +1542,7 @@ int main(int argc, char** argv) {
                     depth_sum += projected.depth;
                 }
 
-                if (!visible) {
+                if (visible_vertices == 0) {
                     continue;
                 }
 

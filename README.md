@@ -35,10 +35,12 @@ graph LR
         Noise[generation/noise.hpp\nvalue & domain noise]
         Biomes[generation/biomes.hpp\nlayer combinators]
         Mesher[meshing/greedy_mesher.hpp\nmesh extraction]
+        Terrain[terrain/classic.hpp\nheightfields]
         Serializer[serialization/region_io.hpp\nasync IO]
     end
     subgraph Integrations
         ExampleApp[examples::sandbox]
+        TerrainDemo[examples::terrain_demo]
         Tests[tests::voxel_checks]
     end
 
@@ -46,6 +48,8 @@ graph LR
     Region --> Noise
     Region --> Biomes
     Chunk --> Mesher --> ExampleApp
+    Region --> Terrain --> TerrainDemo
+    Mesher --> TerrainDemo
     Region --> Serializer --> ExampleApp
     Noise --> Tests
     Mesher --> Tests
@@ -57,11 +61,15 @@ graph TD
         HeaderOnly[[INTERFACE almond_voxel]]
         ExampleSandbox[[example_sandbox]]
         ExampleStreaming[[example_streaming]]
+        TerrainDemo[[terrain_demo]]
+        VoxelShowcase[[voxel_showcase]]
         TestSuite[[voxel_tests]]
     end
 
     HeaderOnly --> ExampleSandbox
     HeaderOnly --> ExampleStreaming
+    HeaderOnly --> TerrainDemo
+    HeaderOnly --> VoxelShowcase
     HeaderOnly --> TestSuite
 
     subgraph Tooling
@@ -73,7 +81,10 @@ graph TD
 
     Configure --> Build --> TestSuite
     Build --> Install --> ExampleSandbox
+    Build --> Install --> TerrainDemo
+    Build --> Install --> VoxelShowcase
     Build --> Run --> ExampleStreaming
+    Build --> Run --> TerrainDemo
 ```
 
 ## Key capabilities
