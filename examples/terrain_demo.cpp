@@ -109,11 +109,11 @@ constexpr std::string_view mesher_label(mesher_choice choice) {
     case mesher_choice::naive:
         return "naive mesher";
     case mesher_choice::greedy:
-        return "greedy mesher";
+        return "cubic mesher";
     case mesher_choice::marching:
         return "marching cubes mesher";
     }
-    return "greedy mesher";
+    return "cubic mesher";
 }
 
 constexpr std::string_view terrain_label(terrain_mode mode) {
@@ -428,7 +428,7 @@ struct projected_triangle {
     region_key region{};
     int lod{};
     std::uint32_t sequence{};
-    mesher_choice mesher{mesher_choice::greedy};
+    mesher_choice mesher{mesher_choice::naive};
     float3 normal{};
     std::array<float3, 3> camera_vertices{};
     std::array<float3, 3> world_vertices{};
@@ -544,7 +544,7 @@ struct chunk_mesh_entry {
     meshing::mesh_result mesh{};
     std::array<std::int64_t, 3> origin{};
     int cell_size{1};
-    mesher_choice mode{mesher_choice::greedy};
+    mesher_choice mode{mesher_choice::naive};
     terrain_mode terrain{terrain_mode::smooth};
 };
 
@@ -1684,7 +1684,7 @@ private:
         chunk_extent extent{};
         std::array<std::int64_t, 3> origin{};
         int cell_size{1};
-        mesher_choice mode{mesher_choice::greedy};
+        mesher_choice mode{mesher_choice::naive};
         std::uint64_t generation{0};
         std::shared_ptr<const terrain_sampler> sampler{};
         std::shared_ptr<const voxel_edit_state> edits{};
@@ -2050,7 +2050,7 @@ void rebuild_chunks_for_edit(const voxel_coord& block, const chunk_extent& exten
 int main(int argc, char** argv) {
     using namespace almond::voxel;
 
-    mesher_choice mesher_mode = mesher_choice::greedy;
+    mesher_choice mesher_mode = mesher_choice::naive;
     terrain_mode terrain_setting = terrain_mode::smooth;
     for (int i = 1; i < argc; ++i) {
         std::string_view arg{argv[i]};
@@ -2058,6 +2058,8 @@ int main(int argc, char** argv) {
             mesher_mode = mesher_choice::marching;
         } else if (arg == "--mesher=naive") {
             mesher_mode = mesher_choice::naive;
+        } else if (arg == "--mesher=cubic") {
+            mesher_mode = mesher_choice::greedy;
         } else if (arg == "--mesher=greedy") {
             mesher_mode = mesher_choice::greedy;
         } else if (arg == "--terrain=classic" || arg == "--classic-terrain") {
@@ -2067,22 +2069,37 @@ int main(int argc, char** argv) {
         }
     }
 
-    std::vector<demo_mode_entry> demo_modes{
+    const std::array<demo_mode_entry, 4> preset_options{
         demo_mode_entry{mesher_choice::naive, terrain_mode::smooth},
         demo_mode_entry{mesher_choice::greedy, terrain_mode::smooth},
         demo_mode_entry{mesher_choice::marching, terrain_mode::smooth},
         demo_mode_entry{mesher_choice::greedy, terrain_mode::classic},
     };
-    auto preset_matches = [&](const demo_mode_entry& entry) {
-        return entry.mesher == mesher_mode && entry.terrain == terrain_setting;
+    std::vector<demo_mode_entry> demo_modes{preset_options.begin(), preset_options.end()};
+    const demo_mode_entry requested{mesher_mode, terrain_setting};
+    const auto select_demo_index = [](mesher_choice mesher, terrain_mode terrain) {
+        if (terrain == terrain_mode::classic) {
+            return std::size_t{3};
+        }
+        switch (mesher) {
+        case mesher_choice::naive:
+            return std::size_t{0};
+        case mesher_choice::marching:
+            return std::size_t{2};
+        case mesher_choice::greedy:
+        default:
+            return std::size_t{1};
+        }
     };
-    auto preset_iterator = std::find_if(demo_modes.begin(), demo_modes.end(), preset_matches);
-    if (preset_iterator == demo_modes.end()) {
-        demo_modes.push_back(demo_mode_entry{mesher_mode, terrain_setting});
-        preset_iterator = demo_modes.end();
-        --preset_iterator;
+    std::size_t demo_mode_index = select_demo_index(mesher_mode, terrain_setting);
+    const demo_mode_entry& selected = demo_modes[demo_mode_index];
+    if (selected.mesher != requested.mesher || selected.terrain != requested.terrain) {
+        std::cout << "Requested demo configuration \"" << demo_mode_label(requested.mesher, requested.terrain)
+                  << "\" is not available; using \""
+                  << demo_mode_label(selected.mesher, selected.terrain) << "\".\n";
     }
-    std::size_t demo_mode_index = static_cast<std::size_t>(preset_iterator - demo_modes.begin());
+    mesher_mode = selected.mesher;
+    terrain_setting = selected.terrain;
 
     try {
         if (test::has_registered_tests()) {
