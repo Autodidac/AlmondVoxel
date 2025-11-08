@@ -388,6 +388,7 @@ struct projected_triangle {
     mesher_choice mesher{mesher_choice::greedy};
     float3 normal{};
     std::array<float3, 3> camera_vertices{};
+    std::array<float3, 3> world_vertices{};
 };
 
 struct clip_vertex {
@@ -395,6 +396,7 @@ struct clip_vertex {
     float y{};
     float z{};
     SDL_FColor color{};
+    float3 world{};
 };
 
 clip_vertex make_clip_vertex(const float3& position, const SDL_FColor& color,
@@ -406,6 +408,7 @@ clip_vertex make_clip_vertex(const float3& position, const SDL_FColor& color,
     vertex.y = dot(relative, vectors.up);
     vertex.z = dot(relative, vectors.forward);
     vertex.color = color;
+    vertex.world = position;
     return vertex;
 }
 
@@ -425,6 +428,9 @@ clip_vertex interpolate_vertex(const clip_vertex& a, const clip_vertex& b, float
     result.color.g = a.color.g + (b.color.g - a.color.g) * t;
     result.color.b = a.color.b + (b.color.b - a.color.b) * t;
     result.color.a = a.color.a + (b.color.a - a.color.a) * t;
+    result.world.x = a.world.x + (b.world.x - a.world.x) * t;
+    result.world.y = a.world.y + (b.world.y - a.world.y) * t;
+    result.world.z = a.world.z + (b.world.z - a.world.z) * t;
     return result;
 }
 
@@ -802,7 +808,23 @@ overlay_output build_overlay_output(overlay_input input) {
         };
 
         const auto add_greedy_edge = [&](const SDL_FPoint& start, const SDL_FPoint& end,
-            const float3& normal, const float3& camera_start, const float3& camera_end) {
+            const float3& normal, const float3& camera_start, const float3& camera_end,
+            const float3& world_start, const float3& world_end) {
+            const float3 world_delta = subtract(world_start, world_end);
+            int non_zero_axes = 0;
+            if (std::abs(world_delta.x) > 1e-4f) {
+                ++non_zero_axes;
+            }
+            if (std::abs(world_delta.y) > 1e-4f) {
+                ++non_zero_axes;
+            }
+            if (std::abs(world_delta.z) > 1e-4f) {
+                ++non_zero_axes;
+            }
+            if (non_zero_axes >= 2) {
+                return;
+            }
+
             auto quant_a = quantize_point(start);
             auto quant_b = quantize_point(end);
             if (quant_a == quant_b) {
@@ -841,10 +863,13 @@ overlay_output build_overlay_output(overlay_input input) {
             const float3& camera_a = tri.camera_vertices[0];
             const float3& camera_b = tri.camera_vertices[1];
             const float3& camera_c = tri.camera_vertices[2];
+            const float3& world_a = tri.world_vertices[0];
+            const float3& world_b = tri.world_vertices[1];
+            const float3& world_c = tri.world_vertices[2];
             if (tri.mesher == mesher_choice::greedy) {
-                add_greedy_edge(a, b, tri.normal, camera_a, camera_b);
-                add_greedy_edge(b, c, tri.normal, camera_b, camera_c);
-                add_greedy_edge(c, a, tri.normal, camera_c, camera_a);
+                add_greedy_edge(a, b, tri.normal, camera_a, camera_b, world_a, world_b);
+                add_greedy_edge(b, c, tri.normal, camera_b, camera_c, world_b, world_c);
+                add_greedy_edge(c, a, tri.normal, camera_c, camera_a, world_c, world_a);
             } else {
                 if (!segment_fully_occluded(camera_a, camera_b, a, b, input.cam,
                         input.output_width, input.output_height, depth_ptr, overlay_depth_bias)) {
@@ -1998,7 +2023,8 @@ int main(int argc, char** argv) {
               << (terrain_setting == terrain_mode::smooth ? "smooth noise terrain" : "classic heightfield terrain")
               << ". Toggle mesher with 'M' and terrain with 'T'. Left click removes voxels, right click places them."
               << " Press Space to jump and hold Shift to sprint. Use F3 to cycle debug overlays (wireframe, non-air, air-only).\n";
-    std::cout << "Render distance starts at the minimum setting. Increase it gradually with '+' if performance allows.\n";
+    std::cout << "Render distance starts at the minimum setting. Adjust it with '[' and ']' as performance allows.\n";
+    std::cout << "Debug overlay distance can be tuned independently with '-' and '='.\n";
 
     const float3 player_half_extents{player_radius, player_radius, player_half_height};
     player_state player{};
@@ -2048,6 +2074,11 @@ int main(int argc, char** argv) {
     constexpr float render_distance_step = 0.05f;
     float render_distance_scale = min_render_distance_scale;
 
+    constexpr float min_overlay_distance_scale = 0.25f;
+    constexpr float max_overlay_distance_scale = 1.25f;
+    constexpr float overlay_distance_step = 0.05f;
+    float overlay_distance_scale = min_overlay_distance_scale;
+
     std::vector<projected_triangle> triangles;
     std::vector<SDL_Vertex> draw_vertices;
     std::vector<clip_vertex> clip_work;
@@ -2086,20 +2117,35 @@ int main(int argc, char** argv) {
                     std::cout << "Switched terrain to "
                               << (terrain_setting == terrain_mode::smooth ? "smooth noise" : "classic heightfield") << "\n";
                     align_player_height();
-                } else if (event.key.key == SDLK_PLUS || event.key.key == SDLK_EQUALS || event.key.key == SDLK_KP_PLUS) {
+                } else if (event.key.key == SDLK_RIGHTBRACKET) {
                     const float previous_scale = render_distance_scale;
                     render_distance_scale = std::min(render_distance_scale + render_distance_step, max_render_distance_scale);
                     if (render_distance_scale != previous_scale) {
                         std::cout << "Render distance scale: "
                                   << static_cast<int>(std::lround(render_distance_scale * 100.0f)) << "%\n";
                     }
-                } else if (event.key.key == SDLK_MINUS || event.key.key == SDLK_UNDERSCORE
-                    || event.key.key == SDLK_KP_MINUS) {
+                } else if (event.key.key == SDLK_LEFTBRACKET) {
                     const float previous_scale = render_distance_scale;
                     render_distance_scale = std::max(render_distance_scale - render_distance_step, min_render_distance_scale);
                     if (render_distance_scale != previous_scale) {
                         std::cout << "Render distance scale: "
                                   << static_cast<int>(std::lround(render_distance_scale * 100.0f)) << "%\n";
+                    }
+                } else if (event.key.key == SDLK_EQUALS || event.key.key == SDLK_PLUS
+                    || event.key.key == SDLK_KP_PLUS) {
+                    const float previous_scale = overlay_distance_scale;
+                    overlay_distance_scale = std::min(overlay_distance_scale + overlay_distance_step, max_overlay_distance_scale);
+                    if (overlay_distance_scale != previous_scale) {
+                        std::cout << "Overlay render distance scale: "
+                                  << static_cast<int>(std::lround(overlay_distance_scale * 100.0f)) << "%\n";
+                    }
+                } else if (event.key.key == SDLK_MINUS || event.key.key == SDLK_UNDERSCORE
+                    || event.key.key == SDLK_KP_MINUS) {
+                    const float previous_scale = overlay_distance_scale;
+                    overlay_distance_scale = std::max(overlay_distance_scale - overlay_distance_step, min_overlay_distance_scale);
+                    if (overlay_distance_scale != previous_scale) {
+                        std::cout << "Overlay render distance scale: "
+                                  << static_cast<int>(std::lround(overlay_distance_scale * 100.0f)) << "%\n";
                     }
                 } else if (event.key.key == SDLK_SPACE) {
                     jump_requested = true;
@@ -2353,6 +2399,9 @@ int main(int argc, char** argv) {
                     tri.camera_vertices[0] = float3{v0.x, v0.y, v0.z};
                     tri.camera_vertices[1] = float3{v1.x, v1.y, v1.z};
                     tri.camera_vertices[2] = float3{v2.x, v2.y, v2.z};
+                    tri.world_vertices[0] = v0.world;
+                    tri.world_vertices[1] = v1.world;
+                    tri.world_vertices[2] = v2.world;
                     tri.depth = std::min({v0.z, v1.z, v2.z});
                     tri.region = key.region;
                     tri.lod = key.lod;
@@ -2405,10 +2454,18 @@ int main(int argc, char** argv) {
             job.vectors = vectors;
             job.output_width = output_width;
             job.output_height = output_height;
-            job.triangles = triangles;
+            std::unordered_set<chunk_instance_key, chunk_instance_hash> overlay_chunks;
+            overlay_chunks.reserve(chunk_meshes.size());
             job.chunks.reserve(chunk_meshes.size());
+            const auto find_lod = [&](int cell_size) -> const lod_definition* {
+                for (const auto& lod : lods) {
+                    if (lod.cell_size == cell_size) {
+                        return &lod;
+                    }
+                }
+                return nullptr;
+            };
             for (const auto& [key, chunk] : chunk_meshes) {
-                (void)key;
                 chunk_overlay_info info{};
                 info.base_x = static_cast<float>(chunk.origin[0]);
                 info.base_y = static_cast<float>(chunk.origin[1]);
@@ -2417,7 +2474,27 @@ int main(int argc, char** argv) {
                 info.depth = static_cast<float>(chunk_dimensions.y * chunk.cell_size);
                 info.height = static_cast<float>(chunk_dimensions.z);
                 info.is_air = chunk.mesh.indices.empty();
+                const lod_definition* lod = find_lod(chunk.cell_size);
+                const float base_overlay_distance = lod ? lod->max_distance : lods.back().max_distance;
+                const float overlay_limit = std::max(0.0f, base_overlay_distance * overlay_distance_scale);
+                const float chunk_center_x = info.base_x + info.width * 0.5f;
+                const float chunk_center_y = info.base_y + info.depth * 0.5f;
+                const float dx = chunk_center_x - cam.position.x;
+                const float dy = chunk_center_y - cam.position.y;
+                const float planar_distance = std::sqrt(dx * dx + dy * dy);
+                const float chunk_radius = 0.5f * std::sqrt(info.width * info.width + info.depth * info.depth);
+                if (planar_distance - chunk_radius > overlay_limit) {
+                    continue;
+                }
                 job.chunks.push_back(info);
+                overlay_chunks.insert(key);
+            }
+            job.triangles.reserve(triangles.size());
+            for (const auto& tri : triangles) {
+                const chunk_instance_key tri_key{tri.region, tri.lod};
+                if (overlay_chunks.find(tri_key) != overlay_chunks.end()) {
+                    job.triangles.push_back(tri);
+                }
             }
             job.generation = ++overlay_generation;
             overlay_render_data = build_overlay_output(std::move(job));
