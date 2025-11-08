@@ -2225,6 +2225,11 @@ int main(int argc, char** argv) {
     auto sampler = std::make_shared<terrain_sampler>(terrain_setting, chunk_dimensions);
     auto voxel_edits = std::make_shared<voxel_edit_state>();
 
+    float min_render_distance_scale = 0.4f;
+    float max_render_distance_scale = 1.0f;
+    const float render_distance_step = 0.05f;
+    float render_distance_scale = 0.7f;
+
     std::cout << "Starting terrain demo with " << demo_mode_description(mesher_mode, terrain_setting)
               << ". Press Alt+M to cycle demo presets";
     for (std::size_t i = 0; i < demo_modes.size(); ++i) {
@@ -2257,11 +2262,6 @@ int main(int argc, char** argv) {
     chunk_build_dispatcher chunk_builder;
 
     std::array<lod_definition, 3> lods{};
-    float min_render_distance_scale = 0.4f;
-    float max_render_distance_scale = 1.0f;
-    const float render_distance_step = 0.05f;
-    float render_distance_scale = 0.7f;
-
     auto apply_render_profile = [&](bool reset_scale) {
         const auto profile = make_render_distance_profile(mesher_mode, terrain_setting);
         lods = profile.lods;
