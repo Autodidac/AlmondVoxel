@@ -49,15 +49,15 @@ scripts fit into the workflow. Each graph reflects the current code layout in `i
 ### Module layering
 ```mermaid
 graph TD
-    Core[core.hpp\nMath & extent helpers]
-    Chunk[chunk.hpp\nChunk & voxel storage]
-    World[world.hpp\nRegion streaming]
-    Generation[generation/noise.hpp\nValue noise]
-    Terrain[terrain/classic.hpp\nTerrain sampling]
-    Editing[editing/voxel_editing.hpp\nBrush utilities]
-    Greedy[meshing/greedy_mesher.hpp\nGreedy meshing]
-    Marching[meshing/marching_cubes.hpp\nMarching cubes]
-    Serial[serialization/region_io.hpp\nRegion IO]
+    Core[core.hpp<br/>Math & extent helpers]
+    Chunk[chunk.hpp<br/>Chunk & voxel storage]
+    World[world.hpp<br/>Region streaming]
+    Generation[generation/noise.hpp<br/>Value noise]
+    Terrain[terrain/classic.hpp<br/>Terrain sampling]
+    Editing[editing/voxel_editing.hpp<br/>Brush utilities]
+    Greedy[meshing/greedy_mesher.hpp<br/>Greedy meshing]
+    Marching[meshing/marching_cubes.hpp<br/>Marching cubes]
+    Serial[serialization/region_io.hpp<br/>Region IO]
 
     Core --> Chunk
     Chunk --> World
@@ -74,9 +74,9 @@ graph TD
 ### Runtime data flow
 ```mermaid
 flowchart LR
-    Loader["loader_type callbacks\n(region_manager::set_loader)"] --> RM[region_manager]
-    Saver["saver_type callbacks\n(region_manager::set_saver)"] --> RM
-    Tasks["task_queue_\n(region_manager::enqueue_task)"] --> RM
+    Loader["loader_type callbacks<br/>(region_manager::set_loader)"] --> RM[region_manager]
+    Saver["saver_type callbacks<br/>(region_manager::set_saver)"] --> RM
+    Tasks["task_queue_<br/>(region_manager::enqueue_task)"] --> RM
     RM -->|assure()/find()| Chunks["chunk_storage instances"]
     Chunks -->|dirty() flag| RM
     RM -->|snapshot_loaded()| Meshing["meshing::greedy_mesh / marching_cubes"]
@@ -89,12 +89,12 @@ flowchart LR
 ### Build scripts and tooling
 ```mermaid
 flowchart TD
-    Configure[cmake/configure.sh\nSet generator & presets]
-    Preset[CMakePresets.json\nCompiler profiles]
-    Build[build.sh\nCompile all targets]
-    Install[install.sh\nStage headers + binaries]
-    Run[run.sh\nLocate & execute binary]
-    Tests[almond_voxel_tests\nCTest integration]
+    Configure[cmake/configure.sh<br/>Set generator & presets]
+    Preset[CMakePresets.json<br/>Compiler profiles]
+    Build[build.sh<br/>Compile all targets]
+    Install[install.sh<br/>Stage headers + binaries]
+    Run[run.sh<br/>Locate & execute binary]
+    Tests[almond_voxel_tests<br/>CTest integration]
     Bench[mesh_bench]
     Demos[terrain_demo]
 
