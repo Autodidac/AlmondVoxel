@@ -271,6 +271,8 @@ struct projected_triangle {
     region_key region{};
     int lod{};
     std::uint32_t sequence{};
+    mesher_choice mesher{mesher_choice::greedy};
+    float3 normal{};
 };
 
 struct clip_vertex {
@@ -514,6 +516,20 @@ struct voxel_edit_state {
         return it->second;
     }
     return std::nullopt;
+}
+
+[[nodiscard]] bool is_bedrock_voxel(const terrain_sampler& sampler, const voxel_edit_state* edits,
+    std::int64_t world_x, std::int64_t world_y, std::int64_t world_z) {
+    const voxel_id bedrock_id = sampler.classic_cfg.bedrock_voxel;
+    if (bedrock_id == voxel_id{}) {
+        return false;
+    }
+    if (auto override_value = find_override(edits, world_x, world_y, world_z)) {
+        if (*override_value == bedrock_id) {
+            return true;
+        }
+    }
+    return sampler.voxel_at(world_x, world_y, world_z) == bedrock_id;
 }
 
 [[nodiscard]] bool heightfield_cell_contains_solid(std::int64_t world_x, std::int64_t world_y,
@@ -1423,8 +1439,7 @@ int main(int argc, char** argv) {
               << " and "
               << (terrain_setting == terrain_mode::smooth ? "smooth noise terrain" : "classic heightfield terrain")
               << ". Toggle mesher with 'M' and terrain with 'T'. Left click removes voxels, right click places them."
-              << " Press Space to jump and hold Shift to sprint. Use F3 to cycle debug overlays (wireframe, non-air, air-only)."
-              << " Wireframe is skipped while viewing cubic voxel meshes.\n";
+              << " Press Space to jump and hold Shift to sprint. Use F3 to cycle debug overlays (wireframe, non-air, air-only).\n";
 
     const float3 player_half_extents{player_radius, player_radius, player_half_height};
     player_state player{};
@@ -1457,13 +1472,6 @@ int main(int argc, char** argv) {
 
     bool running = true;
     debug_display_mode debug_mode = debug_display_mode::off;
-    auto enforce_debug_mode_support = [&]() {
-        if (mesher_mode == mesher_choice::greedy && debug_mode == debug_display_mode::wireframe) {
-            debug_mode = debug_display_mode::solid_chunks;
-            std::cout << "Wireframe debug overlay is unavailable for cubic voxel meshes; displaying solid chunk bounds instea"
-                         "d.\n";
-        }
-    };
     bool mouse_captured = true;
     std::uint64_t previous_ticks = SDL_GetTicks();
 
@@ -1490,7 +1498,6 @@ int main(int argc, char** argv) {
                     running = false;
                 } else if (event.key.key == SDLK_F3) {
                     debug_mode = cycle_debug_mode(debug_mode, mesher_mode, terrain_setting);
-                    enforce_debug_mode_support();
                     std::cout << "Debug overlay: " << debug_mode_name(debug_mode) << "\n";
                 } else if (event.key.key == SDLK_F1) {
                     mouse_captured = !mouse_captured;
@@ -1501,7 +1508,6 @@ int main(int argc, char** argv) {
                     chunk_builder.clear();
                     std::cout << "Switched mesher to "
                               << (mesher_mode == mesher_choice::greedy ? "greedy" : "marching cubes") << "\n";
-                    enforce_debug_mode_support();
                 } else if (event.key.key == SDLK_T) {
                     terrain_setting = terrain_setting == terrain_mode::smooth ? terrain_mode::classic : terrain_mode::smooth;
                     sampler = std::make_shared<terrain_sampler>(terrain_setting, chunk_dimensions);
@@ -1510,7 +1516,6 @@ int main(int argc, char** argv) {
                     std::cout << "Switched terrain to "
                               << (terrain_setting == terrain_mode::smooth ? "smooth noise" : "classic heightfield") << "\n";
                     align_player_height();
-                    enforce_debug_mode_support();
                 } else if (event.key.key == SDLK_SPACE) {
                     jump_requested = true;
                 }
@@ -1537,6 +1542,10 @@ int main(int argc, char** argv) {
                     if (event.button.button == SDL_BUTTON_LEFT) {
                         if (hit.valid) {
                             std::unique_lock<std::shared_mutex> lock{voxel_edits->mutex};
+                            const voxel_coord target = hit.hit;
+                            if (is_bedrock_voxel(*sampler, voxel_edits.get(), target.x, target.y, target.z)) {
+                                continue;
+                            }
                             const voxel_id desired{};
                             const voxel_id base = sampler->voxel_at(hit.hit.x, hit.hit.y, hit.hit.z);
                             if (desired == base) {
@@ -1550,6 +1559,10 @@ int main(int argc, char** argv) {
                         if (hit.valid && hit.has_previous) {
                             if (!block_intersects_player(hit.previous, player.position, player_half_extents)) {
                                 std::unique_lock<std::shared_mutex> lock{voxel_edits->mutex};
+                                const voxel_coord target = hit.previous;
+                                if (is_bedrock_voxel(*sampler, voxel_edits.get(), target.x, target.y, target.z)) {
+                                    continue;
+                                }
                                 const voxel_id desired{2};
                                 const voxel_id base = sampler->voxel_at(hit.previous.x, hit.previous.y, hit.previous.z);
                                 if (desired == base) {
@@ -1746,6 +1759,8 @@ int main(int argc, char** argv) {
                     tri.region = key.region;
                     tri.lod = key.lod;
                     tri.sequence = triangle_index++;
+                    tri.mesher = chunk.mode;
+                    tri.normal = face_normal;
                     triangles.push_back(tri);
                 }
             }
@@ -1792,14 +1807,98 @@ int main(int argc, char** argv) {
                     ? SDL_Color{255, 210, 150, 180}
                     : SDL_Color{170, 230, 255, 170};
                 SDL_SetRenderDrawColor(renderer, wire_color.r, wire_color.g, wire_color.b, wire_color.a);
+                struct wire_edge_key {
+                    std::array<std::int32_t, 2> a{};
+                    std::array<std::int32_t, 2> b{};
+
+                    [[nodiscard]] friend bool operator==(const wire_edge_key&, const wire_edge_key&) noexcept = default;
+                };
+
+                struct wire_edge_hash {
+                    [[nodiscard]] std::size_t operator()(const wire_edge_key& key) const noexcept {
+                        std::size_t seed = std::hash<std::int32_t>{}(key.a[0]);
+                        seed ^= std::hash<std::int32_t>{}(key.a[1]) + 0x9E3779B185EBCA87ull + (seed << 6) + (seed >> 2);
+                        seed ^= std::hash<std::int32_t>{}(key.b[0]) + 0x9E3779B185EBCA87ull + (seed << 6) + (seed >> 2);
+                        seed ^= std::hash<std::int32_t>{}(key.b[1]) + 0x9E3779B185EBCA87ull + (seed << 6) + (seed >> 2);
+                        return seed;
+                    }
+                };
+
+                struct wire_edge_value {
+                    SDL_FPoint a{};
+                    SDL_FPoint b{};
+                    std::array<std::int32_t, 3> normal_key{};
+                    std::uint32_t count{0};
+                    bool coplanar_duplicate{false};
+                };
+
+                std::unordered_map<wire_edge_key, wire_edge_value, wire_edge_hash> greedy_edges;
+
+                const auto quantize_point = [](const SDL_FPoint& point) {
+                    constexpr float scale = 1024.0f;
+                    return std::array<std::int32_t, 2>{
+                        static_cast<std::int32_t>(std::lround(point.x * scale)),
+                        static_cast<std::int32_t>(std::lround(point.y * scale))
+                    };
+                };
+
+                const auto quantize_normal = [](const float3& normal) {
+                    constexpr float scale = 1024.0f;
+                    return std::array<std::int32_t, 3>{
+                        static_cast<std::int32_t>(std::lround(normal.x * scale)),
+                        static_cast<std::int32_t>(std::lround(normal.y * scale)),
+                        static_cast<std::int32_t>(std::lround(normal.z * scale))
+                    };
+                };
+
+                const auto add_greedy_edge = [&](const SDL_FPoint& start, const SDL_FPoint& end, const float3& normal) {
+                    auto quant_a = quantize_point(start);
+                    auto quant_b = quantize_point(end);
+                    if (quant_a == quant_b) {
+                        return;
+                    }
+
+                    SDL_FPoint ordered_start = start;
+                    SDL_FPoint ordered_end = end;
+                    if (quant_a[0] > quant_b[0] || (quant_a[0] == quant_b[0] && quant_a[1] > quant_b[1])) {
+                        std::swap(quant_a, quant_b);
+                        std::swap(ordered_start, ordered_end);
+                    }
+
+                    const wire_edge_key key{quant_a, quant_b};
+                    auto& entry = greedy_edges[key];
+                    const auto normal_key = quantize_normal(normal);
+                    if (entry.count == 0) {
+                        entry.a = ordered_start;
+                        entry.b = ordered_end;
+                        entry.normal_key = normal_key;
+                    } else if (entry.normal_key == normal_key) {
+                        entry.coplanar_duplicate = true;
+                    }
+                    ++entry.count;
+                };
 
                 for (const auto& tri : triangles) {
                     const SDL_FPoint& a = tri.vertices[0].position;
                     const SDL_FPoint& b = tri.vertices[1].position;
                     const SDL_FPoint& c = tri.vertices[2].position;
-                    SDL_RenderLine(renderer, a.x, a.y, b.x, b.y);
-                    SDL_RenderLine(renderer, b.x, b.y, c.x, c.y);
-                    SDL_RenderLine(renderer, c.x, c.y, a.x, a.y);
+                    if (tri.mesher == mesher_choice::greedy) {
+                        add_greedy_edge(a, b, tri.normal);
+                        add_greedy_edge(b, c, tri.normal);
+                        add_greedy_edge(c, a, tri.normal);
+                    } else {
+                        SDL_RenderLine(renderer, a.x, a.y, b.x, b.y);
+                        SDL_RenderLine(renderer, b.x, b.y, c.x, c.y);
+                        SDL_RenderLine(renderer, c.x, c.y, a.x, a.y);
+                    }
+                }
+
+                for (const auto& [key, edge] : greedy_edges) {
+                    (void)key;
+                    if (edge.coplanar_duplicate) {
+                        continue;
+                    }
+                    SDL_RenderLine(renderer, edge.a.x, edge.a.y, edge.b.x, edge.b.y);
                 }
             } else {
                 const auto mode_color = [&]() {
