@@ -6,7 +6,6 @@
 #include "../tests/test_framework.hpp"
 
 #define SDL_MAIN_HANDLED
-
 #include <SDL3/SDL.h>
 
 #include <algorithm>

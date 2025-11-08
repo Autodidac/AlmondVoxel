@@ -59,3 +59,5 @@ StaticLib1/Release
 *.idb
 *.log
 *.tlog
+
+*.user
