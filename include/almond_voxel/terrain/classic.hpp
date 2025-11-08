@@ -5,6 +5,8 @@
 #include "almond_voxel/world.hpp"
 
 #include <cmath>
+#include <cstdint>
+#include <vector>
 
 namespace almond::voxel::terrain {
 
@@ -15,9 +17,11 @@ struct classic_config {
     double base_frequency{0.008};
     double detail_frequency{0.032};
     voxel_id surface_voxel{voxel_id{1}};
+    voxel_id filler_voxel{voxel_id{1}};
     voxel_id subsurface_voxel{voxel_id{1}};
     voxel_id bedrock_voxel{voxel_id{1}};
     std::uint32_t bedrock_layers{2};
+    std::uint32_t surface_depth{4};
 };
 
 class classic_heightfield {
@@ -47,32 +51,59 @@ inline classic_heightfield::classic_heightfield(chunk_extent extent, classic_con
 inline chunk_storage classic_heightfield::operator()(const region_key& key) const {
     chunk_storage chunk{extent_};
     auto voxels = chunk.voxels();
-    for (std::uint32_t z = 0; z < extent_.z; ++z) {
-        const std::int64_t world_z = static_cast<std::int64_t>(key.z) * static_cast<std::int64_t>(extent_.z)
-            + static_cast<std::int64_t>(z);
-        const double sample_z = static_cast<double>(world_z) + 0.5;
-        for (std::uint32_t y = 0; y < extent_.y; ++y) {
-            const double world_y = static_cast<double>(key.y) * static_cast<double>(extent_.y) + static_cast<double>(y);
-            for (std::uint32_t x = 0; x < extent_.x; ++x) {
-                const double world_x = static_cast<double>(key.x) * static_cast<double>(extent_.x) + static_cast<double>(x);
-                const double height = sample_height(world_x, world_y);
-                voxel_id id = voxel_id{};
-                if (sample_z <= height) {
-                    const double depth = height - sample_z;
-                    if (depth > static_cast<double>(config_.bedrock_layers)) {
-                        id = config_.subsurface_voxel;
-                    } else if (depth <= 0.5) {
-                        id = config_.surface_voxel;
-                    } else {
-                        id = config_.subsurface_voxel;
-                    }
-                } else if (world_z <= 0) {
-                    id = config_.bedrock_voxel;
+
+    const std::uint32_t size_x = extent_.x;
+    const std::uint32_t size_y = extent_.y;
+    const std::uint32_t size_z = extent_.z;
+
+    const double base_world_x = static_cast<double>(key.x) * static_cast<double>(size_x);
+    const double base_world_y = static_cast<double>(key.y) * static_cast<double>(size_y);
+    const std::int64_t base_world_z = static_cast<std::int64_t>(key.z) * static_cast<std::int64_t>(size_z);
+
+    std::vector<std::int32_t> column_heights(static_cast<std::size_t>(size_x) * static_cast<std::size_t>(size_y));
+    for (std::uint32_t y = 0; y < size_y; ++y) {
+        const double world_y = base_world_y + static_cast<double>(y);
+        const std::size_t row_offset = static_cast<std::size_t>(y) * static_cast<std::size_t>(size_x);
+        for (std::uint32_t x = 0; x < size_x; ++x) {
+            const double world_x = base_world_x + static_cast<double>(x);
+            const double height = sample_height(world_x, world_y);
+            column_heights[row_offset + x] = static_cast<std::int32_t>(std::floor(height));
+        }
+    }
+
+    const std::uint32_t filler_depth = config_.surface_depth;
+    const std::int64_t bedrock_limit = static_cast<std::int64_t>(config_.bedrock_layers);
+
+    for (std::uint32_t z = 0; z < size_z; ++z) {
+        const std::int64_t world_z = base_world_z + static_cast<std::int64_t>(z);
+        for (std::uint32_t y = 0; y < size_y; ++y) {
+            const std::size_t row_offset = static_cast<std::size_t>(y) * static_cast<std::size_t>(size_x);
+            for (std::uint32_t x = 0; x < size_x; ++x) {
+                const std::int32_t column_height = column_heights[row_offset + x];
+                auto& voxel = voxels(x, y, z);
+
+                if (world_z < bedrock_limit) {
+                    voxel = config_.bedrock_voxel;
+                    continue;
                 }
-                voxels(x, y, z) = id;
+
+                if (world_z > column_height) {
+                    voxel = voxel_id{};
+                    continue;
+                }
+
+                const std::int32_t depth = column_height - static_cast<std::int32_t>(world_z);
+                if (depth == 0) {
+                    voxel = config_.surface_voxel;
+                } else if (depth <= static_cast<std::int32_t>(filler_depth)) {
+                    voxel = config_.filler_voxel;
+                } else {
+                    voxel = config_.subsurface_voxel;
+                }
             }
         }
     }
+
     return chunk;
 }
 
