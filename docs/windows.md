@@ -2,10 +2,18 @@
 
 Use this guide to configure AlmondVoxel on Windows 10/11 for Visual Studio, VS Code, or command-line workflows.
 
+## Table of contents
+- [Prerequisites](#prerequisites)
+- [Environment setup](#environment-setup)
+- [Configure and build](#configure-and-build)
+- [Configuration flags](#configuration-flags)
+- [Performance notes](#performance-notes)
+- [Troubleshooting](#troubleshooting)
+
 ## Prerequisites
 - **Visual Studio 2022** (Desktop development with C++) or the **MSVC Build Tools**.
 - **CMake 3.23+** installed via the Visual Studio installer or the official binaries.
-- **Ninja** (optional) from [Chocolatey](https://community.chocolatey.org/packages/ninja) or [Scoop](https://scoop.sh/).
+- **Ninja** *(optional)* from [Chocolatey](https://community.chocolatey.org/packages/ninja) or [Scoop](https://scoop.sh/).
 - **Git for Windows** to provide Git Bash and Unix-compatible shells.
 
 Optional components:
@@ -50,7 +58,9 @@ bash ./cmake/configure.sh msvc Release `
 - Use the Visual Studio *Graphics Analyzer* to inspect the sandbox renderer after launching via `run.sh`.
 
 ## Troubleshooting
-- **CMake cannot find the compiler**: ensure the prompt is initialised with `VsDevCmd.bat` before calling the scripts.
-- **Ninja build files missing**: install Ninja or allow the scripts to fall back to the Visual Studio generator by removing `ninja.exe` from `PATH`.
-- **Sandbox window fails to create**: update your GPU drivers and verify that the Windows SDK graphics tools are installed.
-- **Doctest runner has no output**: use `./run.sh ... voxel_tests -- --reporters=console` to force console output.
+| Symptom | Resolution |
+| --- | --- |
+| **CMake cannot find the compiler** | Ensure the prompt is initialised with `VsDevCmd.bat` before calling the scripts. |
+| **Ninja build files missing** | Install Ninja or allow the scripts to fall back to the Visual Studio generator by removing `ninja.exe` from `PATH`. |
+| **Sandbox window fails to create** | Update GPU drivers and verify that the Windows SDK graphics tools are installed. |
+| **Doctest runner has no output** | Use `./run.sh ... voxel_tests -- --reporters=console` to force console output. |

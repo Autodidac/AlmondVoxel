@@ -1,8 +1,20 @@
 # API overview
 
-This document catalogues the AlmondVoxel headers, the CMake interface they expose, and recommended patterns for embedding the toolkit in your voxel engine or game.
+This document catalogues the AlmondVoxel headers, the CMake interface they expose, and recommended patterns for embedding the toolkit in your voxel engine or game. Use it as a quick reference when wiring new modules, toggling configuration macros, or extending the examples.
+
+## Table of contents
+- [Module map](#module-map)
+- [Interface target](#interface-target)
+- [Usage patterns](#usage-patterns)
+  - [Chunk streaming](#chunk-streaming)
+  - [Greedy mesh extraction](#greedy-mesh-extraction)
+  - [Marching cubes surfaces](#marching-cubes-surfaces)
+  - [Serialization](#serialization)
+- [Extending the library](#extending-the-library)
+- [Testing helpers](#testing-helpers)
 
 ## Module map
+The headers are organised by domain. All headers can be accessed individually or through the umbrella include `almond_voxel/almond_voxel.hpp`.
 
 | Header | Description | Key types/functions | Configuration flags |
 | --- | --- | --- | --- |
@@ -12,13 +24,11 @@ This document catalogues the AlmondVoxel headers, the CMake interface they expos
 | `almond_voxel/generation/noise.hpp` | Noise functions and combinators for terrain density. | `value_noise`, `ridged_noise`, `fractal_combine`. | `ALMOND_VOXEL_NOISE_FREQUENCY`, `ALMOND_VOXEL_SEED`. |
 | `almond_voxel/generation/biomes.hpp` | Biome layering helpers for climate and material blending. | `biome_map`, `climate_profile`, `biome_picker`. | `ALMOND_VOXEL_BIOME_TABLE` selects predefined profiles. |
 | `almond_voxel/meshing/greedy_mesher.hpp` | Greedy mesher that emits indexed triangle meshes. | `greedy_mesh`, `mesh_buffer`, `mesh_config`. | `ALMOND_VOXEL_ENABLE_DECIMATION` toggles vertex deduplication. |
+| `almond_voxel/meshing/marching_cubes.hpp` | Smooth surface extraction using marching cubes. | `marching_cubes`, `marching_cubes_from_chunk`, `iso_config`. | `ALMOND_VOXEL_MC_GRADIENTS` enables gradient-based normals. |
 | `almond_voxel/serialization/region_io.hpp` | Streaming helpers for async persistence. | `region_writer`, `region_reader`, `compression_mode`. | `ALMOND_VOXEL_COMPRESSION` selects zstd/lz4/raw. |
 | `almond_voxel/testing/doctest.hpp` | Thin wrapper bundling doctest defaults. | `ALMOND_VOXEL_TEST_MAIN`. | `ALMOND_VOXEL_ENABLE_ASSERTS` routes internal checks to doctest. |
 
-All headers are aggregated through `almond_voxel/almond_voxel.hpp`, so consumers can include a single file to access the entire API surface.
-
-## CMake integration
-
+## Interface target
 AlmondVoxel exports the `almond_voxel` target as an `INTERFACE` library. It is header-only and propagates required compile definitions based on the configuration flags described above.
 
 ```cmake
@@ -35,8 +45,7 @@ set_target_properties(worldgen PROPERTIES
 
 For non-CMake build systems, add `include/` to your compiler's search path and provide the same defines manually.
 
-## Typical usage patterns
-
+## Usage patterns
 ### Chunk streaming
 ```cpp
 #include <almond_voxel/world.hpp>
@@ -62,6 +71,17 @@ cfg.enable_decimation = true;
 almond::voxel::mesh_buffer mesh = almond::voxel::meshing::greedy_mesh(chunk, cfg);
 ```
 
+### Marching cubes surfaces
+```cpp
+#include <almond_voxel/meshing/marching_cubes.hpp>
+
+auto buffer = almond::voxel::meshing::marching_cubes_from_chunk(
+    chunk,
+    almond::voxel::meshing::iso_config{
+        .iso_level = 0.25f,
+        .generate_gradients = true});
+```
+
 ### Serialization
 ```cpp
 #include <almond_voxel/serialization/region_io.hpp>
@@ -70,15 +90,14 @@ almond::voxel::region_writer writer{"./regions"};
 writer.save(manager, {0, 0, 0}, almond::voxel::compression_mode::zstd);
 ```
 
-## Adding new modules
-
+## Extending the library
 1. Place headers under an appropriate domain folder inside `include/almond_voxel/`.
 2. Update the umbrella header (`almond_voxel/almond_voxel.hpp`) to export the new module.
 3. Document behaviour and configuration macros in this overview.
 4. Add doctest coverage under `tests/` and, if relevant, surface the feature inside one of the example applications.
+5. Reference the change in `docs/CHANGELOG.md` and update the roadmap if it impacts the near-term goals.
 
 ## Testing helpers
-
 The `voxel_tests` target is built with doctest and includes fixtures for chunk allocation, deterministic noise sequences, and mesh comparators. When creating new tests:
 
 - Include `almond_voxel/testing/doctest.hpp` to pick up the shared configuration.
