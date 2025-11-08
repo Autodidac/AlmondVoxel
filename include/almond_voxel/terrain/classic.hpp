@@ -27,6 +27,8 @@ public:
     [[nodiscard]] chunk_extent extent() const noexcept { return extent_; }
 
     [[nodiscard]] chunk_storage operator()(const region_key& key) const;
+    [[nodiscard]] double sample_height(double world_x, double world_y) const;
+    [[nodiscard]] const classic_config& config() const noexcept { return config_; }
 
 private:
     chunk_extent extent_{};
@@ -53,9 +55,7 @@ inline chunk_storage classic_heightfield::operator()(const region_key& key) cons
             const double world_y = static_cast<double>(key.y) * static_cast<double>(extent_.y) + static_cast<double>(y);
             for (std::uint32_t x = 0; x < extent_.x; ++x) {
                 const double world_x = static_cast<double>(key.x) * static_cast<double>(extent_.x) + static_cast<double>(x);
-                const double base = base_noise_.sample(world_x, world_y) * config_.elevation_amplitude;
-                const double detail = detail_noise_.sample(world_x, world_y) * config_.detail_amplitude;
-                const double height = config_.base_height + base + detail;
+                const double height = sample_height(world_x, world_y);
                 voxel_id id = voxel_id{};
                 if (sample_z <= height) {
                     const double depth = height - sample_z;
@@ -74,6 +74,12 @@ inline chunk_storage classic_heightfield::operator()(const region_key& key) cons
         }
     }
     return chunk;
+}
+
+inline double classic_heightfield::sample_height(double world_x, double world_y) const {
+    const double base = base_noise_.sample(world_x, world_y) * config_.elevation_amplitude;
+    const double detail = detail_noise_.sample(world_x, world_y) * config_.detail_amplitude;
+    return config_.base_height + base + detail;
 }
 
 } // namespace almond::voxel::terrain
