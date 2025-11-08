@@ -84,6 +84,10 @@ constexpr debug_display_mode cycle_debug_mode(debug_display_mode mode) {
     return debug_display_mode::off;
 }
 
+constexpr bool should_use_heightfield(mesher_choice mode, terrain_mode terrain) {
+    return mode == mesher_choice::marching || terrain == terrain_mode::classic;
+}
+
 struct float3 {
     float x{};
     float y{};
@@ -258,6 +262,9 @@ projection_result project_perspective(float3 position, const camera& cam, const 
 struct projected_triangle {
     SDL_Vertex vertices[3]{};
     float depth{};
+    region_key region{};
+    int lod{};
+    std::uint32_t sequence{};
 };
 
 struct clip_vertex {
@@ -490,11 +497,6 @@ struct voxel_edit_state {
     return sampler.voxel_at(world_x, world_y, world_z);
 }
 
-[[nodiscard]] bool voxel_is_solid(const terrain_sampler& sampler, const voxel_edit_state* edits,
-    std::int64_t world_x, std::int64_t world_y, std::int64_t world_z) {
-    return sample_voxel_with_overrides(sampler, edits, world_x, world_y, world_z) != voxel_id{};
-}
-
 [[nodiscard]] std::optional<voxel_id> find_override(const voxel_edit_state* edits,
     std::int64_t world_x, std::int64_t world_y, std::int64_t world_z) {
     if (!edits) {
@@ -505,6 +507,17 @@ struct voxel_edit_state {
         return it->second;
     }
     return std::nullopt;
+}
+
+[[nodiscard]] bool voxel_is_solid(const terrain_sampler& sampler, const voxel_edit_state* edits,
+    std::int64_t world_x, std::int64_t world_y, std::int64_t world_z, bool use_heightfield = false) {
+    if (auto override_id = find_override(edits, world_x, world_y, world_z)) {
+        return *override_id != voxel_id{};
+    }
+    if (use_heightfield) {
+        return heightfield_cell_contains_solid(world_x, world_y, world_z, sampler);
+    }
+    return sampler.voxel_at(world_x, world_y, world_z) != voxel_id{};
 }
 
 [[nodiscard]] bool heightfield_cell_contains_solid(std::int64_t world_x, std::int64_t world_y,
@@ -525,42 +538,8 @@ struct voxel_edit_state {
     return false;
 }
 
-[[nodiscard]] bool box_intersects_heightfield(const float3& center, const float3& half_extents,
-    const terrain_sampler& sampler, const voxel_edit_state* edits) {
-    const float min_x = center.x - half_extents.x;
-    const float max_x = center.x + half_extents.x;
-    const float min_y = center.y - half_extents.y;
-    const float max_y = center.y + half_extents.y;
-    const float min_z = center.z - half_extents.z;
-    const float max_z = center.z + half_extents.z;
-
-    const std::int64_t block_min_x = static_cast<std::int64_t>(std::floor(min_x));
-    const std::int64_t block_max_x = static_cast<std::int64_t>(std::floor(max_x));
-    const std::int64_t block_min_y = static_cast<std::int64_t>(std::floor(min_y));
-    const std::int64_t block_max_y = static_cast<std::int64_t>(std::floor(max_y));
-    const std::int64_t block_min_z = static_cast<std::int64_t>(std::floor(min_z));
-    const std::int64_t block_max_z = static_cast<std::int64_t>(std::floor(max_z));
-
-    for (std::int64_t z = block_min_z; z <= block_max_z; ++z) {
-        for (std::int64_t y = block_min_y; y <= block_max_y; ++y) {
-            for (std::int64_t x = block_min_x; x <= block_max_x; ++x) {
-                if (auto override_id = find_override(edits, x, y, z)) {
-                    if (*override_id != voxel_id{}) {
-                        return true;
-                    }
-                    continue;
-                }
-                if (heightfield_cell_contains_solid(x, y, z, sampler)) {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
-}
-
 [[nodiscard]] bool box_intersects_voxels(const float3& center, const float3& half_extents,
-    const terrain_sampler& sampler, const voxel_edit_state* edits) {
+    const terrain_sampler& sampler, const voxel_edit_state* edits, bool use_heightfield) {
     const float min_x = center.x - half_extents.x;
     const float max_x = center.x + half_extents.x;
     const float min_y = center.y - half_extents.y;
@@ -578,7 +557,7 @@ struct voxel_edit_state {
     for (std::int64_t z = block_min_z; z <= block_max_z; ++z) {
         for (std::int64_t y = block_min_y; y <= block_max_y; ++y) {
             for (std::int64_t x = block_min_x; x <= block_max_x; ++x) {
-                if (voxel_is_solid(sampler, edits, x, y, z)) {
+                if (voxel_is_solid(sampler, edits, x, y, z, use_heightfield)) {
                     return true;
                 }
             }
@@ -603,12 +582,9 @@ void move_player_axis(float3& position, float& velocity_component, float delta, 
         offset.z = delta;
     }
 
+    const bool use_heightfield = should_use_heightfield(mode, sampler.mode);
     const auto intersects = [&](const float3& test_position) {
-        const bool use_heightfield = (mode == mesher_choice::marching) || (sampler.mode == terrain_mode::classic);
-        if (use_heightfield) {
-            return box_intersects_heightfield(test_position, half_extents, sampler, edits);
-        }
-        return box_intersects_voxels(test_position, half_extents, sampler, edits);
+        return box_intersects_voxels(test_position, half_extents, sampler, edits, use_heightfield);
     };
 
     float3 start = position;
@@ -617,7 +593,6 @@ void move_player_axis(float3& position, float& velocity_component, float delta, 
         return;
     }
 
-    const bool use_heightfield = (mode == mesher_choice::marching) || (sampler.mode == terrain_mode::classic);
     if (use_heightfield) {
         float3 last_safe = start;
         float t_low = 0.0f;
@@ -727,7 +702,7 @@ struct voxel_raycast_hit {
 }
 
 [[nodiscard]] voxel_raycast_hit raycast_voxels(float3 origin, float3 direction, float max_distance,
-    const terrain_sampler& sampler, const voxel_edit_state* edits) {
+    const terrain_sampler& sampler, const voxel_edit_state* edits, bool use_heightfield) {
     voxel_raycast_hit result{};
     if (length_squared(direction) <= 1e-6f) {
         return result;
@@ -752,7 +727,7 @@ struct voxel_raycast_hit {
         }
         previous_block = block;
 
-        if (voxel_is_solid(sampler, edits, block.x, block.y, block.z)) {
+        if (voxel_is_solid(sampler, edits, block.x, block.y, block.z, use_heightfield)) {
             result.valid = true;
             result.hit = block;
             return result;
@@ -1294,7 +1269,6 @@ void rebuild_chunks_for_edit(const voxel_coord& block, const chunk_extent& exten
             const std::int64_t ry = region_y + dy;
             region_key region{static_cast<std::int32_t>(rx), static_cast<std::int32_t>(ry), 0};
             const chunk_instance_key key{region, lod.level};
-            cache.erase(key);
             const std::array<std::int64_t, 3> origin{
                 rx * span_x,
                 ry * span_y,
@@ -1390,7 +1364,8 @@ int main(int argc, char** argv) {
         player.position.z = static_cast<float>(height + static_cast<double>(player_half_height) + 1.0);
         {
             std::shared_lock<std::shared_mutex> lock{voxel_edits->mutex};
-            while (box_intersects_voxels(player.position, player_half_extents, *sampler, voxel_edits.get())) {
+            const bool use_heightfield = should_use_heightfield(mesher_mode, sampler->mode);
+            while (box_intersects_voxels(player.position, player_half_extents, *sampler, voxel_edits.get(), use_heightfield)) {
                 player.position.z += 1.0f;
             }
         }
@@ -1465,8 +1440,9 @@ int main(int argc, char** argv) {
                     voxel_raycast_hit hit{};
                     {
                         std::shared_lock<std::shared_mutex> lock{voxel_edits->mutex};
+                        const bool use_heightfield = should_use_heightfield(mesher_mode, sampler->mode);
                         hit = raycast_voxels(cam.position, compute_camera_vectors(cam).forward, 160.0f,
-                            *sampler, voxel_edits.get());
+                            *sampler, voxel_edits.get(), use_heightfield);
                     }
                     if (event.button.button == SDL_BUTTON_LEFT) {
                         if (hit.valid) {
@@ -1607,8 +1583,8 @@ int main(int argc, char** argv) {
         };
 
         for (const auto& [key, chunk] : chunk_meshes) {
-            (void)key;
             const auto& mesh = chunk.mesh;
+            std::uint32_t triangle_index = 0;
             for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
                 const std::uint32_t i0 = mesh.indices[i];
                 const std::uint32_t i1 = mesh.indices[i + 1];
@@ -1661,13 +1637,32 @@ int main(int argc, char** argv) {
                     tri.vertices[1] = make_projected_vertex(v1, cam, output_width, output_height);
                     tri.vertices[2] = make_projected_vertex(v2, cam, output_width, output_height);
                     tri.depth = std::max({v0.z, v1.z, v2.z});
+                    tri.region = key.region;
+                    tri.lod = key.lod;
+                    tri.sequence = triangle_index++;
                     triangles.push_back(tri);
                 }
             }
         }
 
         std::sort(triangles.begin(), triangles.end(), [](const projected_triangle& a, const projected_triangle& b) {
-            return a.depth > b.depth;
+            const float depth_delta = a.depth - b.depth;
+            if (std::abs(depth_delta) > 1e-5f) {
+                return depth_delta > 0.0f;
+            }
+            if (a.lod != b.lod) {
+                return a.lod < b.lod;
+            }
+            if (a.region.z != b.region.z) {
+                return a.region.z < b.region.z;
+            }
+            if (a.region.y != b.region.y) {
+                return a.region.y < b.region.y;
+            }
+            if (a.region.x != b.region.x) {
+                return a.region.x < b.region.x;
+            }
+            return a.sequence < b.sequence;
         });
 
         for (const auto& tri : triangles) {
