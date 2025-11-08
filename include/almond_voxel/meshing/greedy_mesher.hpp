@@ -27,6 +27,7 @@ template <typename IsOpaque, typename NeighborOpaque>
     };
 
     const std::array faces{block_face::pos_x, block_face::neg_x, block_face::pos_y, block_face::neg_y, block_face::pos_z, block_face::neg_z};
+    constexpr float vertical_face_bias = 0.001f;
 
     for (auto face : faces) {
         const std::size_t axis = static_cast<std::size_t>(axis_of(face));
@@ -117,7 +118,10 @@ template <typename IsOpaque, typename NeighborOpaque>
                         }
                     }
 
-                    const float axis_coord = static_cast<float>(plane + (sign > 0 ? 1 : 0));
+                    float axis_coord = static_cast<float>(plane + (sign > 0 ? 1 : 0));
+                    if (axis == 2) {
+                        axis_coord += sign > 0 ? vertical_face_bias : -vertical_face_bias;
+                    }
                     std::array<float, 3> base{0.0f, 0.0f, 0.0f};
                     base[axis] = axis_coord;
                     base[u_axis] = static_cast<float>(u);
