@@ -46,46 +46,48 @@ enum class terrain_mode {
 
 enum class debug_display_mode {
     off,
-    no_air_chunks,
-    air_only,
-    marching_chunks,
-    classic_terrain
+    wireframe,
+    solid_chunks,
+    air_chunks
 };
 
 constexpr std::string_view debug_mode_name(debug_display_mode mode) {
     switch (mode) {
     case debug_display_mode::off:
         return "off";
-    case debug_display_mode::no_air_chunks:
+    case debug_display_mode::wireframe:
+        return "wireframe";
+    case debug_display_mode::solid_chunks:
         return "non-air chunks";
-    case debug_display_mode::air_only:
+    case debug_display_mode::air_chunks:
         return "air-only";
-    case debug_display_mode::marching_chunks:
-        return "marching mesher";
-    case debug_display_mode::classic_terrain:
-        return "classic terrain";
     }
     return "off";
 }
 
-constexpr debug_display_mode cycle_debug_mode(debug_display_mode mode) {
+constexpr debug_display_mode cycle_debug_mode(debug_display_mode mode,
+    mesher_choice mesher, terrain_mode terrain) {
+    const bool supports_wireframe = mesher == mesher_choice::marching
+        || terrain == terrain_mode::classic;
+
     switch (mode) {
     case debug_display_mode::off:
-        return debug_display_mode::no_air_chunks;
-    case debug_display_mode::no_air_chunks:
-        return debug_display_mode::air_only;
-    case debug_display_mode::air_only:
-        return debug_display_mode::marching_chunks;
-    case debug_display_mode::marching_chunks:
-        return debug_display_mode::classic_terrain;
-    case debug_display_mode::classic_terrain:
+        return supports_wireframe ? debug_display_mode::wireframe : debug_display_mode::solid_chunks;
+    case debug_display_mode::wireframe:
+        return debug_display_mode::solid_chunks;
+    case debug_display_mode::solid_chunks:
+        return debug_display_mode::air_chunks;
+    case debug_display_mode::air_chunks:
         return debug_display_mode::off;
     }
     return debug_display_mode::off;
 }
 
-constexpr bool should_use_heightfield(mesher_choice mode, terrain_mode terrain) {
-    return mode == mesher_choice::marching || terrain == terrain_mode::classic;
+constexpr bool collision_uses_heightfield(terrain_mode terrain, mesher_choice mesher) {
+    if (terrain == terrain_mode::classic) {
+        return true;
+    }
+    return mesher == mesher_choice::marching;
 }
 
 struct float3 {
@@ -582,7 +584,7 @@ void move_player_axis(float3& position, float& velocity_component, float delta, 
         offset.z = delta;
     }
 
-    const bool use_heightfield = should_use_heightfield(mode, sampler.mode);
+    const bool use_heightfield = collision_uses_heightfield(sampler.mode, mode);
     const auto intersects = [&](const float3& test_position) {
         return box_intersects_voxels(test_position, half_extents, sampler, edits, use_heightfield);
     };
@@ -1344,7 +1346,8 @@ int main(int argc, char** argv) {
               << " and "
               << (terrain_setting == terrain_mode::smooth ? "smooth noise terrain" : "classic heightfield terrain")
               << ". Toggle mesher with 'M' and terrain with 'T'. Left click removes voxels, right click places them."
-              << " Press Space to jump and hold Shift to sprint. Use F3 to cycle debug overlays (off, non-air, air-only, marching, classic).\n";
+              << " Press Space to jump and hold Shift to sprint. Use F3 to cycle debug overlays (wireframe, non-air, air-only)."
+              << " Wireframe is skipped while viewing cubic voxel meshes.\n";
 
     const float3 player_half_extents{player_radius, player_radius, player_half_height};
     player_state player{};
@@ -1364,7 +1367,7 @@ int main(int argc, char** argv) {
         player.position.z = static_cast<float>(height + static_cast<double>(player_half_height) + 1.0);
         {
             std::shared_lock<std::shared_mutex> lock{voxel_edits->mutex};
-            const bool use_heightfield = should_use_heightfield(mesher_mode, sampler->mode);
+            const bool use_heightfield = collision_uses_heightfield(sampler->mode, mesher_mode);
             while (box_intersects_voxels(player.position, player_half_extents, *sampler, voxel_edits.get(), use_heightfield)) {
                 player.position.z += 1.0f;
             }
@@ -1377,6 +1380,14 @@ int main(int argc, char** argv) {
 
     bool running = true;
     debug_display_mode debug_mode = debug_display_mode::off;
+    auto enforce_debug_mode_support = [&]() {
+        const bool supports_wireframe = mesher_mode == mesher_choice::marching
+            || terrain_setting == terrain_mode::classic;
+        if (!supports_wireframe && debug_mode == debug_display_mode::wireframe) {
+            debug_mode = debug_display_mode::solid_chunks;
+            std::cout << "Debug overlay: " << debug_mode_name(debug_mode) << "\n";
+        }
+    };
     bool mouse_captured = true;
     std::uint64_t previous_ticks = SDL_GetTicks();
 
@@ -1402,7 +1413,7 @@ int main(int argc, char** argv) {
                 if (event.key.key == SDLK_ESCAPE) {
                     running = false;
                 } else if (event.key.key == SDLK_F3) {
-                    debug_mode = cycle_debug_mode(debug_mode);
+                    debug_mode = cycle_debug_mode(debug_mode, mesher_mode, terrain_setting);
                     std::cout << "Debug overlay: " << debug_mode_name(debug_mode) << "\n";
                 } else if (event.key.key == SDLK_F1) {
                     mouse_captured = !mouse_captured;
@@ -1413,6 +1424,7 @@ int main(int argc, char** argv) {
                     chunk_builder.clear();
                     std::cout << "Switched mesher to "
                               << (mesher_mode == mesher_choice::greedy ? "greedy" : "marching cubes") << "\n";
+                    enforce_debug_mode_support();
                 } else if (event.key.key == SDLK_T) {
                     terrain_setting = terrain_setting == terrain_mode::smooth ? terrain_mode::classic : terrain_mode::smooth;
                     sampler = std::make_shared<terrain_sampler>(terrain_setting, chunk_dimensions);
@@ -1421,6 +1433,7 @@ int main(int argc, char** argv) {
                     std::cout << "Switched terrain to "
                               << (terrain_setting == terrain_mode::smooth ? "smooth noise" : "classic heightfield") << "\n";
                     align_player_height();
+                    enforce_debug_mode_support();
                 } else if (event.key.key == SDLK_SPACE) {
                     jump_requested = true;
                 }
@@ -1440,7 +1453,7 @@ int main(int argc, char** argv) {
                     voxel_raycast_hit hit{};
                     {
                         std::shared_lock<std::shared_mutex> lock{voxel_edits->mutex};
-                        const bool use_heightfield = should_use_heightfield(mesher_mode, sampler->mode);
+                        const bool use_heightfield = collision_uses_heightfield(sampler->mode, mesher_mode);
                         hit = raycast_voxels(cam.position, compute_camera_vectors(cam).forward, 160.0f,
                             *sampler, voxel_edits.get(), use_heightfield);
                     }
@@ -1681,87 +1694,79 @@ int main(int argc, char** argv) {
         if (debug_mode != debug_display_mode::off) {
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
-            const auto mode_color = [&]() {
-                switch (debug_mode) {
-                case debug_display_mode::no_air_chunks:
-                    return SDL_Color{240, 240, 255, 80};
-                case debug_display_mode::air_only:
-                    return SDL_Color{255, 180, 180, 110};
-                case debug_display_mode::marching_chunks:
-                    return SDL_Color{170, 225, 255, 100};
-                case debug_display_mode::classic_terrain:
-                    return SDL_Color{255, 220, 150, 110};
-                case debug_display_mode::off:
-                    break;
+            if (debug_mode == debug_display_mode::wireframe) {
+                const SDL_Color wire_color = terrain_setting == terrain_mode::classic
+                    ? SDL_Color{255, 210, 150, 180}
+                    : SDL_Color{170, 230, 255, 170};
+                SDL_SetRenderDrawColor(renderer, wire_color.r, wire_color.g, wire_color.b, wire_color.a);
+
+                for (const auto& tri : triangles) {
+                    const SDL_FPoint& a = tri.vertices[0].position;
+                    const SDL_FPoint& b = tri.vertices[1].position;
+                    const SDL_FPoint& c = tri.vertices[2].position;
+                    SDL_RenderLine(renderer, a.x, a.y, b.x, b.y);
+                    SDL_RenderLine(renderer, b.x, b.y, c.x, c.y);
+                    SDL_RenderLine(renderer, c.x, c.y, a.x, a.y);
                 }
-                return SDL_Color{240, 240, 255, 80};
-            }();
-            SDL_SetRenderDrawColor(renderer, mode_color.r, mode_color.g, mode_color.b, mode_color.a);
+            } else {
+                const auto mode_color = [&]() {
+                    if (debug_mode == debug_display_mode::solid_chunks) {
+                        return terrain_setting == terrain_mode::classic
+                            ? SDL_Color{255, 220, 150, 110}
+                            : SDL_Color{210, 235, 255, 90};
+                    }
+                    return terrain_setting == terrain_mode::classic
+                        ? SDL_Color{255, 185, 170, 125}
+                        : SDL_Color{180, 195, 255, 130};
+                }();
+                SDL_SetRenderDrawColor(renderer, mode_color.r, mode_color.g, mode_color.b, mode_color.a);
 
-            for (const auto& [key, chunk] : chunk_meshes) {
-                (void)key;
-                const bool is_air_chunk = chunk.mesh.indices.empty();
-                const bool is_marching_chunk = chunk.mode == mesher_choice::marching;
-                const bool is_classic_chunk = chunk.terrain == terrain_mode::classic;
+                for (const auto& [key, chunk] : chunk_meshes) {
+                    (void)key;
+                    const bool is_air_chunk = chunk.mesh.indices.empty();
+                    const bool should_draw = (debug_mode == debug_display_mode::solid_chunks) ? !is_air_chunk : is_air_chunk;
 
-                bool should_draw = false;
-                switch (debug_mode) {
-                case debug_display_mode::no_air_chunks:
-                    should_draw = !is_air_chunk;
-                    break;
-                case debug_display_mode::air_only:
-                    should_draw = is_air_chunk;
-                    break;
-                case debug_display_mode::marching_chunks:
-                    should_draw = is_marching_chunk;
-                    break;
-                case debug_display_mode::classic_terrain:
-                    should_draw = is_classic_chunk;
-                    break;
-                case debug_display_mode::off:
-                    break;
-                }
-
-                if (!should_draw) {
-                    continue;
-                }
-
-                const float base_x = static_cast<float>(chunk.origin[0]);
-                const float base_y = static_cast<float>(chunk.origin[1]);
-                const float base_z = static_cast<float>(chunk.origin[2]);
-                const float width = static_cast<float>(chunk_dimensions.x * chunk.cell_size);
-                const float depth = static_cast<float>(chunk_dimensions.y * chunk.cell_size);
-                const float height = static_cast<float>(chunk_dimensions.z);
-
-                const std::array<float3, 8> corners{
-                    float3{base_x, base_y, base_z},
-                    float3{base_x + width, base_y, base_z},
-                    float3{base_x, base_y + depth, base_z},
-                    float3{base_x + width, base_y + depth, base_z},
-                    float3{base_x, base_y, base_z + height},
-                    float3{base_x + width, base_y, base_z + height},
-                    float3{base_x, base_y + depth, base_z + height},
-                    float3{base_x + width, base_y + depth, base_z + height},
-                };
-
-                std::array<SDL_FPoint, corners.size()> projected_points{};
-                std::array<bool, corners.size()> visibility{};
-
-                for (std::size_t i = 0; i < corners.size(); ++i) {
-                    const projection_result projected = project_perspective(corners[i], cam, vectors, output_width, output_height);
-                    visibility[i] = projected.visible;
-                    projected_points[i] = projected.point;
-                }
-
-                for (const auto& edge : box_edges) {
-                    if (!visibility[edge.first] || !visibility[edge.second]) {
+                    if (!should_draw) {
                         continue;
                     }
-                    SDL_RenderLine(renderer,
-                        projected_points[edge.first].x,
-                        projected_points[edge.first].y,
-                        projected_points[edge.second].x,
-                        projected_points[edge.second].y);
+
+                    const float base_x = static_cast<float>(chunk.origin[0]);
+                    const float base_y = static_cast<float>(chunk.origin[1]);
+                    const float base_z = static_cast<float>(chunk.origin[2]);
+                    const float width = static_cast<float>(chunk_dimensions.x * chunk.cell_size);
+                    const float depth = static_cast<float>(chunk_dimensions.y * chunk.cell_size);
+                    const float height = static_cast<float>(chunk_dimensions.z);
+
+                    const std::array<float3, 8> corners{
+                        float3{base_x, base_y, base_z},
+                        float3{base_x + width, base_y, base_z},
+                        float3{base_x, base_y + depth, base_z},
+                        float3{base_x + width, base_y + depth, base_z},
+                        float3{base_x, base_y, base_z + height},
+                        float3{base_x + width, base_y, base_z + height},
+                        float3{base_x, base_y + depth, base_z + height},
+                        float3{base_x + width, base_y + depth, base_z + height},
+                    };
+
+                    std::array<SDL_FPoint, corners.size()> projected_points{};
+                    std::array<bool, corners.size()> visibility{};
+
+                    for (std::size_t i = 0; i < corners.size(); ++i) {
+                        const projection_result projected = project_perspective(corners[i], cam, vectors, output_width, output_height);
+                        visibility[i] = projected.visible;
+                        projected_points[i] = projected.point;
+                    }
+
+                    for (const auto& edge : box_edges) {
+                        if (!visibility[edge.first] || !visibility[edge.second]) {
+                            continue;
+                        }
+                        SDL_RenderLine(renderer,
+                            projected_points[edge.first].x,
+                            projected_points[edge.first].y,
+                            projected_points[edge.second].x,
+                            projected_points[edge.second].y);
+                    }
                 }
             }
 
