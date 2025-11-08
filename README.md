@@ -132,6 +132,21 @@ To install headers and built executables into `built/bin/<Compiler>-<Config>/`:
 ./install.sh <gcc|clang|msvc> <Debug|Release>
 ```
 
+### Single-header distribution
+Generate the amalgamated header during configuration to install a consolidated `almond_voxel_single.hpp` alongside the
+regular modular headers:
+```bash
+cmake -S . -B build -DALMOND_VOXEL_BUILD_AMALGAMATED=ON
+```
+The configure step wires a build target that runs `tools/generate_amalgamated_header.py`, keeps the result in the build
+tree, and installs it to `<prefix>/include/almond_voxel_single.hpp`. When the option is enabled the exported
+`almond_voxel` interface defines `ALMOND_VOXEL_USE_AMALGAMATED_HEADER`, so existing `#include <almond_voxel/almond_voxel.hpp>`
+calls pick up the single header automatically. Projects that prefer to use the amalgamation directly can include it
+explicitly:
+```cpp
+#include <almond_voxel_single.hpp>
+```
+
 ### Run demos and benchmarks
 The repository provides runnable targets that exercise different parts of the library:
 
