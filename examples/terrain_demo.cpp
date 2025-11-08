@@ -55,7 +55,7 @@ struct demo_mode_entry {
 };
 
 enum class debug_display_mode {
-    off,
+    disabled,
     wireframe,
     solid_chunks,
     air_chunks
@@ -63,8 +63,8 @@ enum class debug_display_mode {
 
 constexpr std::string_view debug_mode_name(debug_display_mode mode) {
     switch (mode) {
-    case debug_display_mode::off:
-        return "off";
+    case debug_display_mode::disabled:
+        return "disabled";
     case debug_display_mode::wireframe:
         return "wireframe";
     case debug_display_mode::solid_chunks:
@@ -72,7 +72,7 @@ constexpr std::string_view debug_mode_name(debug_display_mode mode) {
     case debug_display_mode::air_chunks:
         return "air-only";
     }
-    return "off";
+    return "disabled";
 }
 
 constexpr debug_display_mode cycle_debug_mode(debug_display_mode mode,
@@ -81,16 +81,16 @@ constexpr debug_display_mode cycle_debug_mode(debug_display_mode mode,
     (void)terrain;
 
     switch (mode) {
-    case debug_display_mode::off:
+    case debug_display_mode::disabled:
         return debug_display_mode::wireframe;
     case debug_display_mode::wireframe:
         return debug_display_mode::solid_chunks;
     case debug_display_mode::solid_chunks:
         return debug_display_mode::air_chunks;
     case debug_display_mode::air_chunks:
-        return debug_display_mode::off;
+        return debug_display_mode::disabled;
     }
-    return debug_display_mode::off;
+    return debug_display_mode::disabled;
 }
 
 constexpr std::int32_t bedrock_layer_count = 4;
@@ -738,7 +738,7 @@ struct chunk_overlay_info {
 };
 
 struct overlay_input {
-    debug_display_mode mode{debug_display_mode::off};
+    debug_display_mode mode{debug_display_mode::disabled };
     terrain_mode terrain{terrain_mode::smooth};
     camera cam{};
     camera_vectors vectors{};
@@ -750,7 +750,7 @@ struct overlay_input {
 };
 
 struct overlay_output {
-    debug_display_mode mode{debug_display_mode::off};
+    debug_display_mode mode{debug_display_mode::disabled };
     terrain_mode terrain{terrain_mode::smooth};
     std::vector<overlay_draw_group> groups;
     std::size_t generation{0};
@@ -950,7 +950,7 @@ overlay_output build_overlay_output(overlay_input input) {
     output.terrain = input.terrain;
     output.generation = input.generation;
 
-    if (input.mode == debug_display_mode::off) {
+    if (input.mode == debug_display_mode::disabled) {
         return output;
     }
 
@@ -2351,7 +2351,7 @@ int main(int argc, char** argv) {
     apply_demo_mode(demo_mode_index, false);
 
     bool running = true;
-    debug_display_mode debug_mode = debug_display_mode::off;
+    debug_display_mode debug_mode = debug_display_mode::disabled;
     bool mouse_captured = true;
     std::uint64_t previous_ticks = SDL_GetTicks();
     std::uint64_t fps_sample_start = previous_ticks;
@@ -2721,7 +2721,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (debug_mode != debug_display_mode::off) {
+        if (debug_mode != debug_display_mode::disabled) {
             overlay_input job{};
             job.mode = debug_mode;
             job.terrain = terrain_setting;
