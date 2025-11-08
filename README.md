@@ -77,12 +77,12 @@ flowchart LR
     Loader["loader_type callbacks<br/>(region_manager::set_loader)"] --> RM[region_manager]
     Saver["saver_type callbacks<br/>(region_manager::set_saver)"] --> RM
     Tasks["task_queue_<br/>(region_manager::enqueue_task)"] --> RM
-    RM -->|assure()/find()| Chunks["chunk_storage instances"]
-    Chunks -->|dirty() flag| RM
-    RM -->|snapshot_loaded()| Meshing["meshing::greedy_mesh / marching_cubes"]
+    RM -->|"assure() / find()"| Chunks["chunk_storage instances"]
+    Chunks -->|"dirty() flag"| RM
+    RM -->|"snapshot_loaded()"| Meshing["meshing::greedy_mesh / marching_cubes"]
     Meshing --> Buffers[meshing::mesh_buffer]
     Buffers --> Demos["terrain_demo & examples"]
-    RM -->|saver() on evict| Saver
+    RM -->|"saver() on evict"| Saver
 
 ```
 
