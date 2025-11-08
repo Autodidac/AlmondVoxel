@@ -1,6 +1,7 @@
 #include "almond_voxel/world.hpp"
 #include "almond_voxel/meshing/greedy_mesher.hpp"
 #include "almond_voxel/meshing/marching_cubes.hpp"
+#include "almond_voxel/terrain/classic.hpp"
 
 #include "../tests/test_framework.hpp"
 
@@ -17,6 +18,7 @@
 #include <deque>
 #include <exception>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <stop_token>
 #include <string_view>
@@ -32,6 +34,11 @@ using namespace almond::voxel;
 enum class mesher_choice {
     greedy,
     marching
+};
+
+enum class terrain_mode {
+    smooth,
+    classic
 };
 
 struct float3 {
@@ -91,10 +98,18 @@ SDL_FColor shade_color(voxel_id id, const std::array<float, 3>& normal_values, m
     SDL_FColor base{};
     if (mode == mesher_choice::marching) {
         base = SDL_FColor{210.0f / 255.0f, 210.0f / 255.0f, 210.0f / 255.0f, 1.0f};
-    } else if (id == voxel_id{}) {
-        base = SDL_FColor{200.0f / 255.0f, 200.0f / 255.0f, 200.0f / 255.0f, 1.0f};
     } else {
-        base = SDL_FColor{90.0f / 255.0f, 170.0f / 255.0f, 90.0f / 255.0f, 1.0f};
+        if (id == voxel_id{}) {
+            base = SDL_FColor{200.0f / 255.0f, 200.0f / 255.0f, 200.0f / 255.0f, 1.0f};
+        } else if (id == voxel_id{4}) {
+            base = SDL_FColor{75.0f / 255.0f, 75.0f / 255.0f, 80.0f / 255.0f, 1.0f};
+        } else if (id == voxel_id{3}) {
+            base = SDL_FColor{120.0f / 255.0f, 82.0f / 255.0f, 45.0f / 255.0f, 1.0f};
+        } else if (id == voxel_id{2}) {
+            base = SDL_FColor{96.0f / 255.0f, 168.0f / 255.0f, 92.0f / 255.0f, 1.0f};
+        } else {
+            base = SDL_FColor{90.0f / 255.0f, 170.0f / 255.0f, 90.0f / 255.0f, 1.0f};
+        }
     }
 
     const auto scale_component = [intensity](float component) {
@@ -203,6 +218,7 @@ struct chunk_mesh_entry {
     std::array<std::int64_t, 3> origin{};
     int cell_size{1};
     mesher_choice mode{mesher_choice::greedy};
+    terrain_mode terrain{terrain_mode::smooth};
 };
 
 struct lod_definition {
@@ -227,7 +243,7 @@ constexpr std::array<std::pair<int, int>, 12> box_edges{std::to_array<std::pair<
     std::pair{3, 7},
 })};
 
-double terrain_height(double x, double y) {
+double smooth_height(double x, double y) {
     const double large_scale = std::sin(x * 0.005) * 30.0 + std::cos(y * 0.005) * 28.0;
     const double medium_scale = std::sin(x * 0.04 + y * 0.03) * 12.0;
     const double ridge = std::sin(x * 0.12) * std::cos(y * 0.11) * 4.0;
@@ -240,12 +256,59 @@ double sample_coordinate(std::int64_t origin, std::ptrdiff_t index, int cell_siz
     return static_cast<double>(origin) + (static_cast<double>(index) + 0.5) * static_cast<double>(cell_size);
 }
 
-bool cell_is_solid(const std::array<std::int64_t, 3>& origin, int cell_size, const std::array<std::ptrdiff_t, 3>& coord) {
+struct terrain_sampler {
+    terrain_mode mode{terrain_mode::smooth};
+    terrain::classic_heightfield classic;
+
+    static terrain::classic_config classic_profile() {
+        terrain::classic_config cfg{};
+        cfg.surface_voxel = voxel_id{2};
+        cfg.subsurface_voxel = voxel_id{3};
+        cfg.bedrock_voxel = voxel_id{4};
+        return cfg;
+    }
+
+    terrain_sampler(terrain_mode mode_value, const chunk_extent& extent)
+        : mode{mode_value}
+        , classic{extent, classic_profile()} { }
+
+    [[nodiscard]] double height_at(double x, double y) const {
+        if (mode == terrain_mode::classic) {
+            return classic.sample_height(x, y);
+        }
+        return smooth_height(x, y);
+    }
+
+    [[nodiscard]] voxel_id classify(double sample_z, double height, std::int64_t world_z) const {
+        if (mode == terrain_mode::classic) {
+            const auto& cfg = classic.config();
+            if (sample_z <= height) {
+                const double depth = height - sample_z;
+                if (depth > static_cast<double>(cfg.bedrock_layers)) {
+                    return cfg.subsurface_voxel;
+                }
+                if (depth <= 0.5) {
+                    return cfg.surface_voxel;
+                }
+                return cfg.subsurface_voxel;
+            }
+            if (world_z <= 0) {
+                return cfg.bedrock_voxel;
+            }
+            return voxel_id{};
+        }
+        return sample_z < height ? voxel_id{1} : voxel_id{};
+    }
+};
+
+bool cell_is_solid(const std::array<std::int64_t, 3>& origin, int cell_size, const std::array<std::ptrdiff_t, 3>& coord,
+    const terrain_sampler& sampler) {
     const double sample_x = sample_coordinate(origin[0], coord[0], cell_size);
     const double sample_y = sample_coordinate(origin[1], coord[1], cell_size);
-    const double terrain = terrain_height(sample_x, sample_y);
+    const double terrain = sampler.height_at(sample_x, sample_y);
     const double sample_z = static_cast<double>(origin[2]) + (static_cast<double>(coord[2]) + 0.5);
-    return sample_z < terrain;
+    const std::int64_t world_z = static_cast<std::int64_t>(std::floor(sample_z - 0.5));
+    return sampler.classify(sample_z, terrain, world_z) != voxel_id{};
 }
 
 struct terrain_height_cache {
@@ -256,7 +319,7 @@ struct terrain_height_cache {
 };
 
 terrain_height_cache build_height_cache(const chunk_extent& extent, const std::array<std::int64_t, 3>& origin,
-    int cell_size) {
+    int cell_size, const terrain_sampler& sampler) {
     terrain_height_cache cache{};
     const std::size_t cell_width = static_cast<std::size_t>(extent.x);
     const std::size_t cell_height = static_cast<std::size_t>(extent.y);
@@ -290,13 +353,13 @@ terrain_height_cache build_height_cache(const chunk_extent& extent, const std::a
 
     for (std::size_t y = 0; y < cell_height; ++y) {
         for (std::size_t x = 0; x < cell_width; ++x) {
-            cache.cell[y * cache.cell_stride + x] = terrain_height(cell_x[x], cell_y[y]);
+            cache.cell[y * cache.cell_stride + x] = sampler.height_at(cell_x[x], cell_y[y]);
         }
     }
 
     for (std::size_t y = 0; y < vertex_height; ++y) {
         for (std::size_t x = 0; x < vertex_width; ++x) {
-            cache.vertex[y * cache.vertex_stride + x] = terrain_height(vertex_x[x], vertex_y[y]);
+            cache.vertex[y * cache.vertex_stride + x] = sampler.height_at(vertex_x[x], vertex_y[y]);
         }
     }
 
@@ -307,8 +370,9 @@ chunk_mesh_entry build_chunk_mesh(
     const chunk_extent& extent,
     const std::array<std::int64_t, 3>& origin,
     int cell_size,
-    mesher_choice mode) {
-    const auto height_cache = build_height_cache(extent, origin, cell_size);
+    mesher_choice mode,
+    const terrain_sampler& sampler) {
+    const auto height_cache = build_height_cache(extent, origin, cell_size, sampler);
     const std::size_t cell_stride = height_cache.cell_stride;
     const std::size_t vertex_stride = height_cache.vertex_stride;
 
@@ -316,17 +380,19 @@ chunk_mesh_entry build_chunk_mesh(
     auto voxels = chunk.voxels();
     for (std::uint32_t z = 0; z < extent.z; ++z) {
         const double sample_z = static_cast<double>(origin[2]) + (static_cast<double>(z) + 0.5);
+        const std::int64_t world_z = static_cast<std::int64_t>(std::floor(sample_z - 0.5));
         for (std::uint32_t y = 0; y < extent.y; ++y) {
             const std::size_t row = static_cast<std::size_t>(y) * cell_stride;
             for (std::uint32_t x = 0; x < extent.x; ++x) {
                 const double terrain = height_cache.cell[row + static_cast<std::size_t>(x)];
-                voxels(x, y, z) = sample_z < terrain ? voxel_id{1} : voxel_id{};
+                voxels(x, y, z) = sampler.classify(sample_z, terrain, world_z);
             }
         }
     }
 
     chunk_mesh_entry entry{};
     entry.mode = mode;
+    entry.terrain = sampler.mode;
 
     if (mode == mesher_choice::marching) {
         auto density_sampler = [&](std::size_t vx, std::size_t vy, std::size_t vz) {
@@ -353,9 +419,10 @@ chunk_mesh_entry build_chunk_mesh(
                 const std::size_t row = y_index * cell_stride;
                 const double terrain = height_cache.cell[row + x_index];
                 const double sample_z = static_cast<double>(origin[2]) + (static_cast<double>(coord[2]) + 0.5);
-                return sample_z < terrain;
+                const std::int64_t world_z = static_cast<std::int64_t>(std::floor(sample_z - 0.5));
+                return sampler.classify(sample_z, terrain, world_z) != voxel_id{};
             }
-            return cell_is_solid(origin, cell_size, coord);
+            return cell_is_solid(origin, cell_size, coord, sampler);
         };
         entry.mesh = meshing::greedy_mesh_with_neighbors(chunk, is_opaque, neighbor_sampler);
     }
@@ -377,7 +444,8 @@ public:
     ~chunk_build_dispatcher();
 
     void enqueue(const chunk_instance_key& key, const chunk_extent& extent,
-        const std::array<std::int64_t, 3>& origin, int cell_size, mesher_choice mode);
+        const std::array<std::int64_t, 3>& origin, int cell_size, mesher_choice mode,
+        std::shared_ptr<const terrain_sampler> sampler);
     bool is_pending(const chunk_instance_key& key) const;
     void drain_ready(std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash>& cache);
     void clear();
@@ -389,6 +457,7 @@ private:
         int cell_size{1};
         mesher_choice mode{mesher_choice::greedy};
         std::uint64_t generation{0};
+        std::shared_ptr<const terrain_sampler> sampler{};
     };
 
     void worker_loop(std::stop_token stop_token);
@@ -415,12 +484,13 @@ chunk_build_dispatcher::~chunk_build_dispatcher() {
 }
 
 void chunk_build_dispatcher::enqueue(const chunk_instance_key& key, const chunk_extent& extent,
-    const std::array<std::int64_t, 3>& origin, int cell_size, mesher_choice mode) {
+    const std::array<std::int64_t, 3>& origin, int cell_size, mesher_choice mode,
+    std::shared_ptr<const terrain_sampler> sampler) {
     std::scoped_lock lock{mutex_};
-    build_job job{extent, origin, cell_size, mode, generation_};
+    build_job job{extent, origin, cell_size, mode, generation_, std::move(sampler)};
 
     if (auto it = running_jobs_.find(key); it != running_jobs_.end()) {
-        pending_jobs_[key] = job;
+        pending_jobs_.insert_or_assign(key, job);
         return;
     }
 
@@ -510,7 +580,9 @@ void chunk_build_dispatcher::worker_loop(std::stop_token stop_token) {
             running_jobs_[key] = job.generation;
         }
 
-        auto entry = build_chunk_mesh(job.extent, job.origin, job.cell_size, job.mode);
+        terrain_sampler fallback{terrain_mode::smooth, job.extent};
+        const terrain_sampler* sampler = job.sampler ? job.sampler.get() : &fallback;
+        auto entry = build_chunk_mesh(job.extent, job.origin, job.cell_size, job.mode, *sampler);
         chunk_mesh_result result{key, std::move(entry), job.generation};
 
         {
@@ -529,12 +601,14 @@ void chunk_build_dispatcher::worker_loop(std::stop_token stop_token) {
 }
 
 void update_required_chunks(const camera& cam, const chunk_extent& extent, const std::array<lod_definition, 3>& lods,
-    mesher_choice mode, std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash>& cache,
+    mesher_choice mode, const std::shared_ptr<const terrain_sampler>& sampler,
+    std::unordered_map<chunk_instance_key, chunk_mesh_entry, chunk_instance_hash>& cache,
     chunk_build_dispatcher& builder) {
     builder.drain_ready(cache);
     std::unordered_set<chunk_instance_key, chunk_instance_hash> needed;
     const std::size_t build_budget = mode == mesher_choice::marching ? 8 : 12;
     std::size_t enqueued_this_frame = 0;
+    const terrain_mode terrain_setting = sampler ? sampler->mode : terrain_mode::smooth;
 
     for (const auto& lod : lods) {
         const float chunk_size = static_cast<float>(extent.x * lod.cell_size);
@@ -572,13 +646,13 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
                         if (enqueued_this_frame >= build_budget || builder.is_pending(key)) {
                             continue;
                         }
-                        builder.enqueue(key, extent, origin, lod.cell_size, mode);
+                        builder.enqueue(key, extent, origin, lod.cell_size, mode, sampler);
                         ++enqueued_this_frame;
-                    } else if (it->second.mode != mode) {
+                    } else if (it->second.mode != mode || it->second.terrain != terrain_setting) {
                         if (builder.is_pending(key) || enqueued_this_frame >= build_budget) {
                             continue;
                         }
-                        builder.enqueue(key, extent, origin, lod.cell_size, mode);
+                        builder.enqueue(key, extent, origin, lod.cell_size, mode, sampler);
                         ++enqueued_this_frame;
                     }
                 }
@@ -601,12 +675,17 @@ int main(int argc, char** argv) {
     using namespace almond::voxel;
 
     mesher_choice mesher_mode = mesher_choice::greedy;
+    terrain_mode terrain_setting = terrain_mode::smooth;
     for (int i = 1; i < argc; ++i) {
         std::string_view arg{argv[i]};
         if (arg == "--marching-cubes" || arg == "--mesher=marching") {
             mesher_mode = mesher_choice::marching;
         } else if (arg == "--mesher=greedy") {
             mesher_mode = mesher_choice::greedy;
+        } else if (arg == "--terrain=classic" || arg == "--classic-terrain") {
+            terrain_setting = terrain_mode::classic;
+        } else if (arg == "--terrain=smooth") {
+            terrain_setting = terrain_mode::smooth;
         }
     }
 
@@ -642,11 +721,18 @@ int main(int argc, char** argv) {
     }
 
     const chunk_extent chunk_dimensions{32, 32, 96};
+    auto sampler = std::make_shared<terrain_sampler>(terrain_setting, chunk_dimensions);
     const std::array<lod_definition, 3> lods{
         lod_definition{0, 0.0f, 200.0f, 1},
         lod_definition{1, 180.0f, 480.0f, 2},
         lod_definition{2, 440.0f, 1400.0f, 4},
     };
+
+    std::cout << "Starting terrain demo with "
+              << (mesher_mode == mesher_choice::greedy ? "greedy mesher" : "marching cubes mesher")
+              << " and "
+              << (terrain_setting == terrain_mode::smooth ? "smooth noise terrain" : "classic heightfield terrain")
+              << ". Toggle mesher with 'M' and terrain with 'T'.\n";
 
     camera cam{};
     cam.position = float3{0.0f, -180.0f, 90.0f};
@@ -685,6 +771,13 @@ int main(int argc, char** argv) {
                     chunk_builder.clear();
                     std::cout << "Switched mesher to "
                               << (mesher_mode == mesher_choice::greedy ? "greedy" : "marching cubes") << "\n";
+                } else if (event.key.key == SDLK_T) {
+                    terrain_setting = terrain_setting == terrain_mode::smooth ? terrain_mode::classic : terrain_mode::smooth;
+                    sampler = std::make_shared<terrain_sampler>(terrain_setting, chunk_dimensions);
+                    chunk_meshes.clear();
+                    chunk_builder.clear();
+                    std::cout << "Switched terrain to "
+                              << (terrain_setting == terrain_mode::smooth ? "smooth noise" : "classic heightfield") << "\n";
                 }
             } else if (event.type == SDL_EVENT_MOUSE_MOTION && mouse_captured) {
                 const float sensitivity = 0.0025f;
@@ -747,7 +840,7 @@ int main(int argc, char** argv) {
             cam.position = add(cam.position, scale(move_delta, move_speed * delta_seconds));
         }
 
-        update_required_chunks(cam, chunk_dimensions, lods, mesher_mode, chunk_meshes, chunk_builder);
+        update_required_chunks(cam, chunk_dimensions, lods, mesher_mode, sampler, chunk_meshes, chunk_builder);
 
         SDL_SetRenderDrawColor(renderer, 25, 25, 35, 255);
         SDL_RenderClear(renderer);
