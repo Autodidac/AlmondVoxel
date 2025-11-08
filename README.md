@@ -31,47 +31,37 @@ graph LR
         Chunk[chunk.hpp\nchunk_storage]
         Region[world.hpp\nregion_manager]
     end
-    subgraph Generation
+    subgraph Pipelines
         Noise[generation/noise.hpp\nvalue & domain noise]
-        Terrain[terrain/classic.hpp\nheightfields]
-    end
-    subgraph Meshing
-        Greedy[meshing/greedy_mesher.hpp\ngreedy quads]
-        Marching[meshing/marching_cubes.hpp\nsmooth surfaces]
+        Biomes[generation/biomes.hpp\nlayer combinators]
+        Mesher[meshing/greedy_mesher.hpp\nmesh extraction]
         Serializer[serialization/region_io.hpp\nasync IO]
     end
     subgraph Integrations
-        TerrainDemo[examples/terrain_demo.cpp\nplayer & collision]
-        Showcase[examples/voxel_showcase.cpp\nrender demo]
+        ExampleApp[examples::sandbox]
         Tests[tests::voxel_checks]
     end
 
     VoxelCore --> Chunk --> Region
     Region --> Noise
-    Region --> Terrain
-    Chunk --> Greedy --> TerrainDemo
-    Chunk --> Marching --> TerrainDemo
-    Greedy --> Showcase
-    Marching --> Showcase
-    Region --> Serializer --> Showcase
-    Region --> Tests
-    Greedy --> Tests
-    Marching --> Tests
+    Region --> Biomes
+    Chunk --> Mesher --> ExampleApp
+    Region --> Serializer --> ExampleApp
+    Noise --> Tests
+    Mesher --> Tests
 ```
 
 ```mermaid
 graph TD
     subgraph Build Targets
         HeaderOnly[[INTERFACE almond_voxel]]
-        TerrainDemoTarget[[terrain_demo]]
-        ShowcaseTarget[[voxel_showcase]]
-        Benchmarks[[mesh_bench]]
+        ExampleSandbox[[example_sandbox]]
+        ExampleStreaming[[example_streaming]]
         TestSuite[[voxel_tests]]
     end
 
-    HeaderOnly --> TerrainDemoTarget
-    HeaderOnly --> ShowcaseTarget
-    HeaderOnly --> Benchmarks
+    HeaderOnly --> ExampleSandbox
+    HeaderOnly --> ExampleStreaming
     HeaderOnly --> TestSuite
 
     subgraph Tooling
@@ -82,8 +72,8 @@ graph TD
     end
 
     Configure --> Build --> TestSuite
-    Build --> Install --> ShowcaseTarget
-    Build --> Run --> TerrainDemoTarget
+    Build --> Install --> ExampleSandbox
+    Build --> Run --> ExampleStreaming
 ```
 
 ## Key capabilities
