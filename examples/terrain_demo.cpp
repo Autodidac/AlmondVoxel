@@ -1177,6 +1177,8 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
     chunk_build_dispatcher& builder) {
     builder.drain_ready(cache);
     std::unordered_set<chunk_instance_key, chunk_instance_hash> needed;
+    std::unordered_map<chunk_instance_key, std::array<std::int64_t, 3>, chunk_instance_hash> required_origins;
+    std::unordered_map<chunk_instance_key, int, chunk_instance_hash> required_cell_sizes;
     const std::size_t build_budget = mode == mesher_choice::marching ? 8 : 12;
     std::size_t enqueued_this_frame = 0;
     const terrain_mode terrain_setting = sampler ? sampler->mode : terrain_mode::smooth;
@@ -1212,23 +1214,57 @@ void update_required_chunks(const camera& cam, const chunk_extent& extent, const
 
                 const chunk_instance_key key{region, lod.level};
                 if (needed.insert(key).second) {
-                    auto it = cache.find(key);
-                    if (it == cache.end()) {
-                        if (enqueued_this_frame >= build_budget || builder.is_pending(key)) {
-                            continue;
-                        }
-                        builder.enqueue(key, extent, origin, lod.cell_size, mode, sampler, edits);
-                        ++enqueued_this_frame;
-                    } else if (it->second.mode != mode || it->second.terrain != terrain_setting) {
-                        if (builder.is_pending(key) || enqueued_this_frame >= build_budget) {
-                            continue;
-                        }
-                        builder.enqueue(key, extent, origin, lod.cell_size, mode, sampler, edits);
-                        ++enqueued_this_frame;
+                    required_origins[key] = origin;
+                    required_cell_sizes[key] = lod.cell_size;
+                }
+
+                auto it = cache.find(key);
+                if (it == cache.end()) {
+                    if (enqueued_this_frame >= build_budget || builder.is_pending(key)) {
+                        continue;
                     }
+                    builder.enqueue(key, extent, origin, lod.cell_size, mode, sampler, edits);
+                    ++enqueued_this_frame;
+                } else if (it->second.mode != mode || it->second.terrain != terrain_setting) {
+                    if (builder.is_pending(key) || enqueued_this_frame >= build_budget) {
+                        continue;
+                    }
+                    builder.enqueue(key, extent, origin, lod.cell_size, mode, sampler, edits);
+                    ++enqueued_this_frame;
                 }
             }
         }
+    }
+
+    const auto neighbor_present = [&](const chunk_instance_key& key, int dx, int dy) {
+        chunk_instance_key neighbor_key{region_key{key.region.x + dx, key.region.y + dy, key.region.z}, key.lod};
+        return cache.find(neighbor_key) != cache.end();
+    };
+
+    std::size_t requeued = 0;
+    const std::size_t extra_budget = 2;
+    for (const auto& [key, origin] : required_origins) {
+        if (cache.find(key) != cache.end() || builder.is_pending(key)) {
+            continue;
+        }
+
+        const bool horizontal_pair = neighbor_present(key, 1, 0) && neighbor_present(key, -1, 0);
+        const bool vertical_pair = neighbor_present(key, 0, 1) && neighbor_present(key, 0, -1);
+        if (!horizontal_pair && !vertical_pair) {
+            continue;
+        }
+
+        if (enqueued_this_frame + requeued >= build_budget + extra_budget) {
+            break;
+        }
+
+        const auto cell_size_it = required_cell_sizes.find(key);
+        if (cell_size_it == required_cell_sizes.end()) {
+            continue;
+        }
+
+        builder.enqueue(key, extent, origin, cell_size_it->second, mode, sampler, edits);
+        ++requeued;
     }
 
     for (auto it = cache.begin(); it != cache.end();) {
@@ -1381,8 +1417,11 @@ int main(int argc, char** argv) {
     bool running = true;
     debug_display_mode debug_mode = debug_display_mode::off;
     auto enforce_debug_mode_support = [&]() {
-        (void)mesher_mode;
-        (void)terrain_setting;
+        if (mesher_mode == mesher_choice::greedy && debug_mode == debug_display_mode::wireframe) {
+            debug_mode = debug_display_mode::solid_chunks;
+            std::cout << "Wireframe debug overlay is unavailable for cubic voxel meshes; displaying solid chunk bounds instea"
+                         "d.\n";
+        }
     };
     bool mouse_captured = true;
     std::uint64_t previous_ticks = SDL_GetTicks();
@@ -1410,6 +1449,7 @@ int main(int argc, char** argv) {
                     running = false;
                 } else if (event.key.key == SDLK_F3) {
                     debug_mode = cycle_debug_mode(debug_mode, mesher_mode, terrain_setting);
+                    enforce_debug_mode_support();
                     std::cout << "Debug overlay: " << debug_mode_name(debug_mode) << "\n";
                 } else if (event.key.key == SDLK_F1) {
                     mouse_captured = !mouse_captured;
